@@ -114,9 +114,9 @@ def connect_to_bigquery(project_id, dataset_id):
 
 
 def execute_custom_query(query, query_name):
-    """Execute a custom BigQuery query."""
+    """Execute a custom BigQuery query with enhanced error reporting."""
     if st.session_state.connection_status != "connected":
-        return None, "❌ Not connected to BigQuery"
+        return None, "❌ Not connected to BigQuery. Please check your connection settings."
     
     try:
         client = st.session_state.bigquery_client
@@ -133,11 +133,35 @@ def execute_custom_query(query, query_name):
         }, f"✅ Query executed successfully - {len(df)} rows returned"
         
     except Exception as e:
+        error_msg = str(e)
+        
+        # Enhanced error categorization and helpful messages
+        if "Unrecognized name" in error_msg:
+            table_column_hint = "This usually means a column doesn't exist in the table. Check your column names and table schema."
+        elif "Table" in error_msg and "not found" in error_msg:
+            table_column_hint = "The specified table doesn't exist. Verify your project ID, dataset ID, and table name."
+        elif "Access Denied" in error_msg or "permission" in error_msg.lower():
+            table_column_hint = "Permission denied. Check if your service account has access to the dataset and tables."
+        elif "Invalid table name" in error_msg:
+            table_column_hint = "Invalid table name format. Ensure table names follow BigQuery naming conventions."
+        elif "Syntax error" in error_msg or "Expected" in error_msg:
+            table_column_hint = "SQL syntax error. Check your derivation logic for proper BigQuery SQL syntax."
+        elif "Dataset" in error_msg and "not found" in error_msg:
+            table_column_hint = "The dataset doesn't exist. Verify your project ID and dataset ID configuration."
+        elif "Quota exceeded" in error_msg or "rate limit" in error_msg.lower():
+            table_column_hint = "Query quota or rate limit exceeded. Try again in a few minutes or simplify your query."
+        else:
+            table_column_hint = "Review your SQL query, table names, column names, and data permissions."
+        
+        detailed_error = f"BigQuery Error: {error_msg}\n💡 Suggestion: {table_column_hint}"
+        
         return {
             'status': 'error',
-            'error': str(e),
+            'error': error_msg,
+            'detailed_error': detailed_error,
+            'scenario': query_name,
             'timestamp': datetime.now()
-        }, f"❌ Query execution failed: {str(e)}"
+        }, f"❌ Query execution failed for '{query_name}': {detailed_error}"
 
 
 def initialize_session_state():
@@ -249,8 +273,8 @@ def convert_business_logic_to_safe_sql(derivation_logic, source_table, project_i
     
     except Exception as e:
         # Safe fallback for any parsing errors
-        logging.error(f"🚨 Exception in convert_business_logic_to_safe_sql: {e}")
-        logging.error(f"🚨 Input was: '{derivation_logic}' for table: '{source_table}'")
+        logger.error(f"🚨 Exception in convert_business_logic_to_safe_sql: {e}")
+        logger.error(f"🚨 Input was: '{derivation_logic}' for table: '{source_table}'")
         return logic.strip()  # Return original logic as fallback
 
 
@@ -661,7 +685,7 @@ def create_transformation_validation_sql(source_table, target_table, source_join
         )
         
         if is_simple_column:
-            logging.info(f"🎯 Detected direct column comparison: {clean_logic} -> {target_column}")
+            logger.info(f"🎯 Detected direct column comparison: {clean_logic} -> {target_column}")
             # Check if we have a valid target table for comparison
             if target_table is None or target_table.strip() == '':
                 # No target table - this is data quality validation for a simple column
@@ -720,7 +744,7 @@ ref_data AS (
         
         # Replace reference table name with alias in derivation logic
         reference_alias_logic = derivation_logic.replace(reference_table, 'r')
-        logging.info(f"🔗 Reference mapping: {reference_table} -> r, Logic: {reference_alias_logic}")
+        logger.info(f"🔗 Reference mapping: {reference_table} -> r, Logic: {reference_alias_logic}")
     
     # Convert business logic to safe SQL
     safe_derivation_logic = convert_business_logic_to_safe_sql(
@@ -1153,7 +1177,10 @@ def execute_all_excel_scenarios():
             # Debug info: Log the extracted values for transparency
             logger.info(f"Scenario: {scenario_name}")
             logger.info(f"  Source: {source_project_id}.{source_dataset_id}.{source_table}")
-            logger.info(f"  Target: {target_project_id}.{target_dataset_id}.{target_table or 'N/A'}")
+            if target_table:
+                logger.info(f"  Target: {target_project_id}.{target_dataset_id}.{target_table}")
+            else:
+                logger.info(f"  Target: N/A (Data Quality Check)")
             logger.info(f"  Primary Project ID: {primary_project_id}")
             
             # Enhanced: Handle reference data parameters
@@ -1291,7 +1318,22 @@ def execute_all_excel_scenarios():
                         'timestamp': datetime.now()
                     })
                 else:
-                    error_msg = query_result.get('error', 'Query failed') if query_result else 'Query failed'
+                    # Enhanced error reporting with detailed information
+                    if query_result:
+                        error_msg = query_result.get('detailed_error', query_result.get('error', 'Unknown query error'))
+                        if 'detailed_error' not in query_result:
+                            # Add context if not already detailed
+                            base_error = query_result.get('error', 'Unknown error')
+                            if "Unrecognized name" in base_error:
+                                error_msg = f"{base_error}\n💡 Check if all columns exist in your tables. Common issues: column name typos, missing reference table columns."
+                            elif "not found" in base_error:
+                                error_msg = f"{base_error}\n💡 Verify your project ID: '{primary_project_id}', dataset: '{source_dataset_id}', and table names."
+                            else:
+                                error_msg = base_error
+                    else:
+                        error_msg = f"Query execution failed for scenario '{scenario_name}'. No detailed error information available.\n💡 Check your BigQuery connection and query syntax."
+                    
+                    logger.error(f"❌ Query failed for '{scenario_name}': {error_msg}")
                     results.append({
                         'scenario_name': scenario_name,
                         'status': 'ERROR',
@@ -1307,33 +1349,50 @@ def execute_all_excel_scenarios():
                         'timestamp': datetime.now()
                     })
             else:
+                error_msg = f"SQL generation failed for scenario '{scenario_name}'.\n💡 Check your derivation logic syntax and table/column references. Ensure all required columns are properly formatted."
+                logger.error(f"❌ {error_msg}")
                 results.append({
                     'scenario_name': scenario_name,
                     'status': 'ERROR',
                     'total_rows': 0,
                     'pass_rows': 0,
                     'fail_rows': 0,
-                    'error_message': 'Failed to generate SQL',
+                    'error_message': error_msg,
                     'source_table': source_table,
                     'target_table': target_table or 'N/A (Data Quality Check)',
                     'target_column': target_column,
                     'reference_table': reference_table or '',
-                    'sql_query': 'SQL generation failed',
+                    'sql_query': 'SQL generation failed - check derivation logic',
                     'timestamp': datetime.now()
                 })
                 
         except Exception as e:
-            logger.error(f"Error executing row {index}: {str(e)}")
+            error_str = str(e)
+            scenario_name_for_error = scenario_name if 'scenario_name' in locals() else f"Row_{index+1}"
+            
+            # Enhanced exception categorization
+            if "Missing required" in error_str or "must be in format" in error_str:
+                detailed_error = f"Configuration Error: {error_str}\n💡 Check your Excel file column values and format. Ensure project/dataset IDs are properly configured."
+            elif "KeyError" in error_str:
+                detailed_error = f"Missing Column Error: {error_str}\n💡 Required column is missing from your Excel file. Check column names match expected format."
+            elif "ValueError" in error_str:
+                detailed_error = f"Data Format Error: {error_str}\n💡 Check data types and formats in your Excel file. Ensure numeric fields contain valid numbers."
+            elif "AttributeError" in error_str:
+                detailed_error = f"Data Processing Error: {error_str}\n💡 Check if all required fields have valid values (not empty/null)."
+            else:
+                detailed_error = f"Unexpected Error: {error_str}\n💡 Review your Excel data format and ensure all required columns are present with valid values."
+            
+            logger.error(f"❌ Error executing {scenario_name_for_error}: {detailed_error}")
             results.append({
-                'scenario_name': f"Row_{index}",
+                'scenario_name': scenario_name_for_error,
                 'status': 'ERROR',
                 'total_rows': 0,
                 'pass_rows': 0,
                 'fail_rows': 0,
-                'error_message': str(e),
-                'source_table': '',
-                'target_table': '',
-                'target_column': '',
+                'error_message': detailed_error,
+                'source_table': locals().get('source_table', 'Unknown'),
+                'target_table': locals().get('target_table', 'Unknown'),
+                'target_column': locals().get('target_column', 'Unknown'),
                 'reference_table': '',
                 'sql_query': 'Error in processing',
                 'timestamp': datetime.now()
@@ -1394,10 +1453,18 @@ def show_scenario_dashboard():
         # Prepare error message if it exists
         error_info = ""
         if result['status'] == 'ERROR' and 'error_message' in result:
-            error_info = result['error_message']
-            # Truncate long error messages for display
-            if len(error_info) > 100:
-                error_info = error_info[:97] + "..."
+            full_error = result['error_message']
+            
+            # Extract the main error part (before the suggestion)
+            if '\n💡' in full_error:
+                main_error, suggestion = full_error.split('\n💡', 1)
+                # For display, show the main error and a short hint
+                if len(main_error) > 80:
+                    main_error = main_error[:77] + "..."
+                error_info = f"{main_error} 💡{suggestion[:50]}..." if len(suggestion) > 50 else f"{main_error} 💡{suggestion}"
+            else:
+                # No suggestion part, just truncate if too long
+                error_info = full_error[:100] + "..." if len(full_error) > 100 else full_error
         
         results_data.append({
             'Status': f"{status_emoji} {result['status']}",
@@ -1412,6 +1479,43 @@ def show_scenario_dashboard():
     
     df_results = pd.DataFrame(results_data)
     st.dataframe(df_results, use_container_width=True)
+    
+    # Show detailed error information for failed scenarios
+    failed_results = [r for r in results if r['status'] == 'ERROR']
+    if failed_results:
+        with st.expander(f"🔍 Detailed Error Information ({len(failed_results)} failures)", expanded=False):
+            for i, result in enumerate(failed_results):
+                st.subheader(f"❌ {result.get('scenario_name', 'Unknown Scenario')}")
+                
+                # Show configuration details
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Configuration:**")
+                    st.write(f"• Source: `{result.get('source_table', 'N/A')}`")
+                    st.write(f"• Target: `{result.get('target_table', 'N/A')}`")
+                    st.write(f"• Column: `{result.get('target_column', 'N/A')}`")
+                    if result.get('reference_table'):
+                        st.write(f"• Reference: `{result.get('reference_table')}`")
+                
+                with col2:
+                    st.write("**Error Details:**")
+                    error_msg = result.get('error_message', 'No error message available')
+                    
+                    # Format the error message nicely
+                    if '\n💡' in error_msg:
+                        main_error, suggestion = error_msg.split('\n💡', 1)
+                        st.error(f"**Error:** {main_error}")
+                        st.info(f"💡 **Suggestion:** {suggestion}")
+                    else:
+                        st.error(f"**Error:** {error_msg}")
+                
+                # Show SQL query if available
+                if result.get('sql_query') and result.get('sql_query') != 'SQL generation failed - check derivation logic':
+                    with st.expander("📋 Generated SQL Query", expanded=False):
+                        st.code(result.get('sql_query'), language='sql')
+                
+                if i < len(failed_results) - 1:  # Add separator except for last item
+                    st.divider()
     
     # Create SQL queries dataframe for Excel
     sql_data = []
