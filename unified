@@ -1028,20 +1028,53 @@ def execute_all_excel_scenarios():
         st.error("No Excel data to execute")
         return
     
-    project_id = st.session_state.get('project_id')
-    if not project_id:
-        st.error("Project ID not configured")
-        return
-    
     df = st.session_state['excel_data']
     results = []
     
     # Enhanced: Required columns including reference data fields
-    required_cols = ['Scenario_Name', 'Source_Table', 'Derivation_Logic']
+    # Source_Dataset_Id is required - either in 'project_id.dataset_name' format or with separate Source_Project_Id
+    required_cols = ['Scenario_Name', 'Source_Table', 'Derivation_Logic', 'Source_Dataset_Id']
+    optional_cols = ['Source_Project_Id', 'Target_Project_Id', 'Target_Dataset_Id']
     missing_cols = [col for col in required_cols if col not in df.columns]
     
     if missing_cols:
         st.error(f"Missing required columns: {', '.join(missing_cols)}")
+        available_optional = [col for col in optional_cols if col in df.columns]
+        if available_optional:
+            st.info(f"Available optional columns: {', '.join(available_optional)}")
+        st.info("Required columns:")
+        st.info("- Scenario_Name: Name of the validation scenario")
+        st.info("- Source_Table: Source table name")
+        st.info("- Derivation_Logic: SQL logic for validation")
+        st.info("- Source_Dataset_Id: Either 'project_id.dataset_name' format or dataset name with separate Source_Project_Id column")
+        return
+    
+    # Validate Source_Dataset_Id format for early error detection
+    validation_errors = []
+    for index, row in df.iterrows():
+        if pd.isna(row.get('Scenario_Name')) or str(row.get('Scenario_Name')).strip() == '':
+            continue  # Skip empty rows
+            
+        scenario_name = str(row['Scenario_Name']).strip()
+        
+        # Check if we have proper project/dataset configuration
+        has_source_project_id = 'Source_Project_Id' in row and not pd.isna(row['Source_Project_Id'])
+        has_source_dataset_id = 'Source_Dataset_Id' in row and not pd.isna(row['Source_Dataset_Id'])
+        
+        if not has_source_dataset_id:
+            validation_errors.append(f"Row {index+1} ({scenario_name}): Missing Source_Dataset_Id")
+        elif not has_source_project_id:
+            source_dataset_full = str(row['Source_Dataset_Id']).strip()
+            if '.' not in source_dataset_full:
+                validation_errors.append(f"Row {index+1} ({scenario_name}): Source_Dataset_Id '{source_dataset_full}' must be in 'project_id.dataset_name' format when Source_Project_Id is not provided")
+    
+    if validation_errors:
+        st.error("Data validation errors found:")
+        for error in validation_errors:
+            st.error(f"❌ {error}")
+        st.info("Please fix these errors before proceeding:")
+        st.info("- Provide Source_Project_Id column OR use 'project_id.dataset_name' format in Source_Dataset_Id")
+        st.info("- Ensure all scenarios have proper project and dataset configuration")
         return
     
     # Progress tracking
@@ -1061,12 +1094,67 @@ def execute_all_excel_scenarios():
             # Extract enhanced parameters
             source_table = str(row['Source_Table']).strip()
             
+            # Extract project_id and dataset_id from Excel columns
+            # Priority: Source_Project_Id > extract from Source_Dataset_Id > raise error
+            if 'Source_Project_Id' in row and not pd.isna(row['Source_Project_Id']):
+                source_project_id = str(row['Source_Project_Id']).strip()
+            elif 'Source_Dataset_Id' in row and not pd.isna(row['Source_Dataset_Id']):
+                source_dataset_full = str(row['Source_Dataset_Id']).strip()
+                if '.' in source_dataset_full:
+                    source_project_id, _ = source_dataset_full.split('.', 1)
+                else:
+                    raise ValueError(f"Source_Dataset_Id '{source_dataset_full}' must be in format 'project_id.dataset_name' or provide Source_Project_Id column")
+            else:
+                raise ValueError("Missing required Source_Project_Id or Source_Dataset_Id column")
+            
+            # Extract source dataset_id
+            if 'Source_Dataset_Id' in row and not pd.isna(row['Source_Dataset_Id']):
+                source_dataset_full = str(row['Source_Dataset_Id']).strip()
+                if '.' in source_dataset_full:
+                    _, source_dataset_id = source_dataset_full.split('.', 1)
+                else:
+                    source_dataset_id = source_dataset_full
+            else:
+                raise ValueError("Missing required Source_Dataset_Id column")
+            
+            # Extract target project_id and dataset_id
+            if 'Target_Project_Id' in row and not pd.isna(row['Target_Project_Id']):
+                target_project_id = str(row['Target_Project_Id']).strip()
+            elif 'Target_Dataset_Id' in row and not pd.isna(row['Target_Dataset_Id']):
+                target_dataset_full = str(row['Target_Dataset_Id']).strip()
+                if '.' in target_dataset_full:
+                    target_project_id, _ = target_dataset_full.split('.', 1)
+                else:
+                    target_project_id = source_project_id  # use source project for same-project scenarios
+            else:
+                target_project_id = source_project_id  # use source project for same-project scenarios
+            
+            # Extract target dataset_id
+            if 'Target_Dataset_Id' in row and not pd.isna(row['Target_Dataset_Id']):
+                target_dataset_full = str(row['Target_Dataset_Id']).strip()
+                if '.' in target_dataset_full:
+                    _, target_dataset_id = target_dataset_full.split('.', 1)
+                else:
+                    target_dataset_id = target_dataset_full
+            else:
+                target_dataset_id = source_dataset_id  # use source dataset for same-dataset scenarios
+            
+            # Use source project_id as the primary project for the query
+            # (assuming most operations will be within the same project)
+            primary_project_id = source_project_id
+            
             # Handle target table - if not specified or same as source, we're doing data quality validation
             target_table_raw = row.get('Target_Table', '')
             if pd.isna(target_table_raw) or str(target_table_raw).strip() == '' or str(target_table_raw).strip() == source_table:
                 target_table = None  # No separate target table - data quality validation
             else:
                 target_table = str(target_table_raw).strip()
+            
+            # Debug info: Log the extracted values for transparency
+            logger.info(f"Scenario: {scenario_name}")
+            logger.info(f"  Source: {source_project_id}.{source_dataset_id}.{source_table}")
+            logger.info(f"  Target: {target_project_id}.{target_dataset_id}.{target_table or 'N/A'}")
+            logger.info(f"  Primary Project ID: {primary_project_id}")
             
             # Enhanced: Handle reference data parameters
             reference_table = None
@@ -1116,9 +1204,9 @@ def execute_all_excel_scenarios():
                 target_join_key=str(row.get('Target_Join_Key', 'account_id')).strip(),
                 target_column=target_column,
                 derivation_logic=derivation_logic,
-                project_id=project_id,
-                source_dataset_id=str(row.get('Source_Dataset_Id', 'banking_sample_data')).strip(),
-                target_dataset_id=str(row.get('Target_Dataset_Id', 'banking_sample_data')).strip(),
+                project_id=primary_project_id,
+                source_dataset_id=source_dataset_id,
+                target_dataset_id=target_dataset_id,
                 reference_table=reference_table,
                 reference_join_key=reference_join_key,
                 reference_lookup_column=reference_lookup_column
