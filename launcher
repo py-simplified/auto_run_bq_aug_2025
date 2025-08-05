@@ -1,0 +1,38 @@
+import subprocess
+import sys
+import os
+
+def launch_streamlit_app():
+    """
+    Launcher script for the Streamlit file browser app
+    """
+    try:
+        # Get the directory where this launcher script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Path to the main Streamlit app
+        app_file = os.path.join(script_dir, "app.py")
+        
+        # Check if the app file exists
+        if not os.path.exists(app_file):
+            print(f"Error: {app_file} not found!")
+            return
+        
+        print("Starting Streamlit File Browser App...")
+        print(f"App file: {app_file}")
+        print("=" * 50)
+        
+        # Launch Streamlit with the app file
+        subprocess.run([
+            sys.executable, "-m", "streamlit", "run", app_file,
+            "--server.port", "8501",
+            "--server.headless", "false"
+        ])
+        
+    except KeyboardInterrupt:
+        print("\nApp stopped by user.")
+    except Exception as e:
+        print(f"Error launching app: {e}")
+
+if __name__ == "__main__":
+    launch_streamlit_app()
