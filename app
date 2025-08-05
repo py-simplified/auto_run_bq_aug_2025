@@ -576,9 +576,42 @@ def main():
                             
                             # Write to Excel file in output directory
                             with pd.ExcelWriter(enhanced_excel_path, engine='openpyxl') as writer:
-                                df_with_sql.to_excel(writer, sheet_name='ValidationScenarios', index=False)
+                                # Create Results sheet with specified columns in order (FIRST TAB)
+                                results_columns = [
+                                    'Scenario_ID', 'Scenario_Name', 'Description', 'Total_Failed', 
+                                    'Total_Passed', 'Overall_Status', 'Failure_File_Path', 'Generated_SQL'
+                                ]
                                 
-                                # Auto-adjust column widths
+                                # Filter DataFrame to include only the specified columns that exist
+                                available_columns = [col for col in results_columns if col in df_with_sql.columns]
+                                df_results = df_with_sql[available_columns].copy()
+                                
+                                # Write Results sheet first
+                                df_results.to_excel(writer, sheet_name='Results', index=False)
+                                
+                                # Auto-adjust column widths for Results sheet
+                                results_worksheet = writer.sheets['Results']
+                                for column in results_worksheet.columns:
+                                    max_length = 0
+                                    column_letter = column[0].column_letter
+                                    for cell in column:
+                                        try:
+                                            if len(str(cell.value)) > max_length:
+                                                max_length = len(str(cell.value))
+                                        except:
+                                            pass
+                                    # Set a reasonable max width
+                                    adjusted_width = min(max_length + 2, 50)
+                                    results_worksheet.column_dimensions[column_letter].width = adjusted_width
+                                
+                                # Create ValidationScenarios sheet excluding execution result columns (SECOND TAB)
+                                validation_exclude_columns = ['Generated_SQL', 'Total_Passed', 'Total_Failed', 'Overall_Status', 'Failure_File_Path']
+                                df_validation = df_with_sql.drop(columns=[col for col in validation_exclude_columns if col in df_with_sql.columns])
+                                
+                                # Write filtered validation results to ValidationScenarios sheet
+                                df_validation.to_excel(writer, sheet_name='ValidationScenarios', index=False)
+                                
+                                # Auto-adjust column widths for ValidationScenarios sheet
                                 worksheet = writer.sheets['ValidationScenarios']
                                 for column in worksheet.columns:
                                     max_length = 0
@@ -592,15 +625,6 @@ def main():
                                     # Set a reasonable max width
                                     adjusted_width = min(max_length + 2, 50)
                                     worksheet.column_dimensions[column_letter].width = adjusted_width
-                            
-                            # Show preview of the enhanced dataframe
-                            st.write("*Preview of Enhanced Excel File with Execution Results:*")
-                            # Show first few rows with truncated SQL for preview
-                            preview_df = df_with_sql.copy()
-                            preview_df['Generated_SQL'] = preview_df['Generated_SQL'].apply(
-                                lambda x: x[:50] + "..." if len(str(x)) > 50 else x
-                            )
-                            st.dataframe(preview_df.head(), use_container_width=True)
                             
                             # Show summary statistics
                             st.write("**Execution Summary:**")
@@ -622,19 +646,18 @@ def main():
                                 failure_files_count = len([f for f in failure_files_created if f not in ["No failures", "Execution failed", "No credentials"]])
                                 st.metric("Failure Files Created", failure_files_count)
                             
-                            # Show created failure files
-                            if failure_files_count > 0:
-                                st.write("**Created Failure Files:**")
-                                failure_files_list = [f for f in failure_files_created if f not in ["No failures", "Execution failed", "No credentials"]]
-                                for file_path in failure_files_list:
-                                    st.write(f"📄 {file_path}")
-                                
-                                st.info(f"💡 {failure_files_count} individual failure Excel files have been created in the `output/ScenarioFailures/` directory.")
-                            
-                            # Show information about the created files
+                            # Show information about all created files
                             st.write("**Created Files:**")
                             enhanced_excel_relative_path = os.path.relpath(enhanced_excel_path, script_dir)
                             st.write(f"📄 **Main Report:** {enhanced_excel_relative_path}")
+                            
+                            # Show created failure files
+                            if failure_files_count > 0:
+                                st.write(f"� **Individual Failure Files ({failure_files_count}):**")
+                                failure_files_list = [f for f in failure_files_created if f not in ["No failures", "Execution failed", "No credentials"]]
+                                for file_path in failure_files_list:
+                                    st.write(f"   • {file_path}")
+                            
                             st.info(f"💡 All validation files have been saved to the `output/` directory.")
                             
                             st.success("✅ Validation completed! All Excel files with execution results and individual failure files have been created!")
