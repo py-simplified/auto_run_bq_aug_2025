@@ -2,8 +2,27 @@ import streamlit as st
 import pandas as pd
 import os
 from google.cloud import bigquery
-from google.oauth2 import service_account
-import json
+import google.auth
+
+def initialize_client(project_id):
+    """Return an authenticated bigquery.Client using ADC. Keep optional proxy lines commented."""
+    import os, google.auth
+    from google.cloud import bigquery
+    # Optional (corp) proxy – leave commented unless needed:
+    # if 'prod' in project_id:
+    #     os.environ["HTTP_PROXY"] = "googleapis:0000"
+    #     os.environ["HTTPS_PROXY"] = "googleapis:0000"
+    # elif 'dev' in project_id:
+    #     os.environ["HTTP_PROXY"] = "googleapis:0000"
+    #     os.environ["HTTPS_PROXY"] = "googleapis:0000"
+    credentials, _ = google.auth.default()
+    return bigquery.Client(credentials=credentials, project=project_id)
+
+def get_or_switch_client(client, project_id):
+    """Return the same client if client.project == project_id else returns initialize_client(project_id)."""
+    if client and client.project == project_id:
+        return client
+    return initialize_client(project_id)
 
 def fix_table_aliases_in_sql(sql_query):
     """
@@ -56,13 +75,13 @@ def fix_table_aliases_in_sql(sql_query):
     
     return '\n'.join(modified_lines)
 
-def get_column_data_type(target_project, target_dataset, target_table, target_column, credentials_path):
+def get_column_data_type(client, target_project, target_dataset, target_table, target_column):
     """
     Query BigQuery INFORMATION_SCHEMA to get the data type of a target column
     """
     try:
-        credentials = service_account.Credentials.from_service_account_file(credentials_path)
-        client = bigquery.Client(credentials=credentials, project=target_project)
+        # Switch client if needed for different project
+        project_client = get_or_switch_client(client, target_project)
         
         type_query = f"""
         SELECT data_type
@@ -70,7 +89,7 @@ def get_column_data_type(target_project, target_dataset, target_table, target_co
         WHERE table_name = '{target_table}' AND column_name = '{target_column}'
         """
         
-        query_job = client.query(type_query)
+        query_job = project_client.query(type_query)
         results = query_job.result(timeout=30)
         
         for row in results:
@@ -82,7 +101,7 @@ def get_column_data_type(target_project, target_dataset, target_table, target_co
         print(f"Error getting column type: {str(e)}")
         return None
 
-def generate_validation_sql(row):
+def generate_validation_sql(row, client=None):
     """
     Generate BigQuery validation SQL for a single row of validation data with type-aware comparison
     """
@@ -104,14 +123,10 @@ def generate_validation_sql(row):
     
     derivation_logic = row.get('Derivation_Logic', '')
     
-    # First, get the data type of the target column
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    credentials_file = os.path.join(script_dir, "cohesive-apogee-411113-ca31a86921e7.json")
-    
-    if os.path.exists(credentials_file):
-        column_data_type = get_column_data_type(target_project, target_dataset, target_table, target_column, credentials_file)
-    else:
-        column_data_type = None
+    # Get the data type of the target column if client is provided
+    column_data_type = None
+    if client:
+        column_data_type = get_column_data_type(client, target_project, target_dataset, target_table, target_column)
     
     # Build the SQL query
     sql_parts = []
@@ -209,26 +224,24 @@ def generate_validation_sql(row):
     
     return fixed_sql
 
-def execute_validation_sql_and_save_failures(sql_script, credentials_path, scenario_id, scenario_name, output_dir):
+def execute_validation_sql_and_save_failures(sql_script, client, scenario_id, scenario_name, output_dir):
     """
     Execute validation SQL and save failure records to individual Excel files
     """
     import re
     
     try:
-        # Load credentials from service account file
-        if not os.path.exists(credentials_path):
-            return False, "Credentials file not found", 0, 0, None
-        
-        credentials = service_account.Credentials.from_service_account_file(credentials_path)
-        
         # Extract project from the first table reference in the SQL
         project_match = re.search(r'`([^.]+)\.[^.]+\.[^`]+`', sql_script)
         if not project_match:
             return False, "Could not extract project ID from SQL", 0, 0, None
         
         project_id = project_match.group(1)
-        client = bigquery.Client(credentials=credentials, project=project_id)
+        
+        # Ensure client project is set if needed
+        if client.project != project_id:
+            # Switch project if needed using our helper function
+            client = get_or_switch_client(project_id)
         
         # Execute the main query (not the summary) to get all results
         main_query = sql_script.split('-- Summary')[0].strip()
@@ -303,17 +316,11 @@ def execute_validation_sql_and_save_failures(sql_script, credentials_path, scena
 
 
 
-def execute_validation_sql(sql_script, credentials_path):
+def execute_validation_sql(sql_script, client):
     """
     Execute a validation SQL script and return results
     """
     try:
-        # Load credentials from service account file
-        if not os.path.exists(credentials_path):
-            return False, "Credentials file not found", None
-        
-        credentials = service_account.Credentials.from_service_account_file(credentials_path)
-        
         # Extract project from the first table reference in the SQL
         import re
         project_match = re.search(r'`([^.]+)\.[^.]+\.[^`]+`', sql_script)
@@ -321,7 +328,11 @@ def execute_validation_sql(sql_script, credentials_path):
             return False, "Could not extract project ID from SQL", None
         
         project_id = project_match.group(1)
-        client = bigquery.Client(credentials=credentials, project=project_id)
+        
+        # Ensure client project is set if needed
+        if client.project != project_id:
+            # Switch project if needed using our helper function
+            client = get_or_switch_client(project_id)
         
         # Execute the main query (not the summary)
         main_query = sql_script.split('-- Summary')[0].strip()
@@ -353,17 +364,17 @@ def execute_validation_sql(sql_script, credentials_path):
     except Exception as e:
         return False, f"Execution error: {str(e)}", None
 
-def test_bigquery_connectivity(project_id, dataset_id, credentials_path):
+def test_bigquery_connectivity(project_id, dataset_id, client=None):
     """
     Test connectivity to BigQuery project and dataset
     """
     try:
-        # Load credentials from service account file
-        if not os.path.exists(credentials_path):
-            return False, f"Credentials file not found: {credentials_path}"
-        
-        credentials = service_account.Credentials.from_service_account_file(credentials_path)
-        client = bigquery.Client(credentials=credentials, project=project_id)
+        # Use provided client or initialize a new one
+        if client is None:
+            client = initialize_client(project_id)
+        elif client.project != project_id:
+            # Switch project if needed using our helper function
+            client = get_or_switch_client(project_id)
         
         # Test basic connectivity with a simple query
         test_query = f"""
@@ -433,13 +444,23 @@ def main():
                     # Connectivity Testing Section
                     st.write("**BigQuery Connectivity Testing:**")
                     
-                    # Check for credentials file
-                    script_dir = os.path.dirname(os.path.abspath(__file__))
-                    credentials_file = os.path.join(script_dir, "cohesive-apogee-411113-ca31a86921e7.json")
+                    # Initialize BigQuery client using ADC
+                    try:
+                        # Get a sample project ID from the data to initialize client
+                        sample_project = df['Source_Project_Id'].iloc[0] if 'Source_Project_Id' in df.columns else None
+                        
+                        if sample_project:
+                            client = initialize_client(sample_project)
+                            st.success("✅ BigQuery client initialized successfully using Application Default Credentials")
+                        else:
+                            st.error("⚠️ Could not determine project ID for BigQuery client initialization")
+                            client = None
+                    except Exception as e:
+                        st.error(f"⚠️ Failed to initialize BigQuery client: {str(e)}")
+                        st.info("Please ensure Application Default Credentials are set up: `gcloud auth application-default login`")
+                        client = None
                     
-                    if not os.path.exists(credentials_file):
-                        st.error("⚠️ BigQuery credentials file not found. Please ensure 'cohesive-apogee-411113-ca31a86921e7.json' is in the same directory.")
-                    else:
+                    if client:
                         st.write("*Testing Source Combinations:*")
                         source_results = []
                         
@@ -449,7 +470,7 @@ def main():
                             dataset_id = row['Source_Dataset_Id']
                             
                             with st.spinner(f"Testing {project_id}.{dataset_id}..."):
-                                success, message = test_bigquery_connectivity(project_id, dataset_id, credentials_file)
+                                success, message = test_bigquery_connectivity(project_id, dataset_id, client)
                                 source_results.append({
                                     'Project_Id': project_id,
                                     'Dataset_Id': dataset_id,
@@ -470,7 +491,7 @@ def main():
                             dataset_id = row['Target_Dataset_Id']
                             
                             with st.spinner(f"Testing {project_id}.{dataset_id}..."):
-                                success, message = test_bigquery_connectivity(project_id, dataset_id, credentials_file)
+                                success, message = test_bigquery_connectivity(project_id, dataset_id, client)
                                 target_results.append({
                                     'Project_Id': project_id,
                                     'Dataset_Id': dataset_id,
@@ -514,18 +535,29 @@ def main():
                             overall_status = []
                             failure_files_created = []
                             
-                            # Check for credentials file for execution
-                            script_dir = os.path.dirname(os.path.abspath(__file__))
-                            credentials_file = os.path.join(script_dir, "cohesive-apogee-411113-ca31a86921e7.json")
-                            
                             # Create output directory for failure files
+                            script_dir = os.path.dirname(os.path.abspath(__file__))
                             output_dir = os.path.join(script_dir, "output", "ScenarioFailures")
+                            
+                            # Initialize BigQuery client
+                            try:
+                                # Get a sample project ID from the data to initialize client
+                                sample_project = df['Source_Project_Id'].iloc[0] if 'Source_Project_Id' in df.columns else None
+                                
+                                if sample_project:
+                                    client = initialize_client(sample_project)
+                                else:
+                                    client = None
+                                    st.error("Could not determine project ID for BigQuery client initialization")
+                            except Exception as e:
+                                st.error(f"Failed to initialize BigQuery client: {str(e)}")
+                                client = None
                             
                             # Process each row
                             with st.spinner("Generating SQL, executing queries, and creating failure files..."):
                                 for idx, row in df.iterrows():
-                                    # Generate SQL
-                                    sql_script = generate_validation_sql(row)
+                                    # Generate SQL with client for type detection
+                                    sql_script = generate_validation_sql(row, client)
                                     generated_sqls.append(sql_script)
                                     
                                     # Get scenario details
@@ -533,9 +565,9 @@ def main():
                                     scenario_name = str(row.get('Scenario_Name', f'Scenario_{idx+1}'))
                                     
                                     # Execute SQL to get PASS/FAIL counts and create failure files
-                                    if os.path.exists(credentials_file):
+                                    if client:
                                         success, message, pass_count, fail_count, failure_file_path = execute_validation_sql_and_save_failures(
-                                            sql_script, credentials_file, scenario_id, scenario_name, output_dir
+                                            sql_script, client, scenario_id, scenario_name, output_dir
                                         )
                                         
                                         if success:
@@ -557,11 +589,11 @@ def main():
                                             overall_status.append('EXECUTION_ERROR')
                                             failure_files_created.append("Execution failed")
                                     else:
-                                        # If no credentials, set default values
+                                        # If no client, set default values
                                         total_passed.append(0)
                                         total_failed.append(0)
-                                        overall_status.append('NO_CREDENTIALS')
-                                        failure_files_created.append("No credentials")
+                                        overall_status.append('NO_CLIENT')
+                                        failure_files_created.append("No BigQuery client")
                             
                             # Add the new columns to dataframe
                             df_with_sql['Generated_SQL'] = generated_sqls
