@@ -1,11 +1,154 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime
+
+# Page configuration (set early before any other Streamlit calls)
+st.set_page_config(page_title="Data Validation - Enhanced", page_icon="✅", layout="wide")
 
 # Configuration: Hard stop behavior for join key uniqueness failures
 # Set to True to halt validation immediately when join key uniqueness fails
 # Set to False to skip failing scenarios and continue with valid ones
 HARD_STOP_ON_UNIQUENESS = True
+
+# Limits and output behavior
+# If a failure dataset exceeds this row count, save as CSV instead of XLSX to avoid memory/performance issues.
+FAILURE_XLSX_MAX_ROWS = 50000
+
+def sanitize_filename(name: str, max_len: int = 120) -> str:
+    """Return a Windows-safe filename derived from an arbitrary string.
+    - Replaces characters <>:"/\|?* with underscore
+    - Trims whitespace and trailing dot/space; bounds length
+    """
+    if name is None:
+        return "unnamed"
+    safe = str(name)
+    for ch in '<>:"/\\|?*':
+        safe = safe.replace(ch, '_')
+    safe = ' '.join(safe.split())
+    safe = safe.strip(' .')
+    return (safe or 'unnamed')[:max_len]
+
+def make_run_output_paths(base_dir: str):
+    """Create and return run-scoped output directories and main report path.
+    Returns (run_id, run_dir, failures_dir, report_path).
+    """
+    run_id = datetime.now().strftime('run_%Y%m%d_%H%M%S')
+    run_dir = os.path.join(base_dir, run_id)
+    failures_dir = os.path.join(run_dir, 'ScenarioFailures')
+    os.makedirs(failures_dir, exist_ok=True)
+    report_path = os.path.join(run_dir, 'ValidationResults_Enhanced.xlsx')
+    return run_id, run_dir, failures_dir, report_path
+
+# Join-key normalization controls
+NORMALIZE_JOIN_KEYS_TRIM = True   # Trim whitespace before joins/uniqueness
+NORMALIZE_JOIN_KEYS_CASE = 'none' # one of: 'none', 'lower', 'upper'
+COERCE_JOIN_KEYS_TO_STRING = True # Cast join keys to string for robust matching
+
+def normalize_series_for_join(s: pd.Series) -> pd.Series:
+    """Normalize a Series for joining based on config flags.
+    Keeps pandas <NA> values as missing; otherwise applies string ops.
+    """
+    if s is None:
+        return s
+    ser = s
+    try:
+        if COERCE_JOIN_KEYS_TO_STRING:
+            # Use pandas string dtype to keep NA awareness
+            ser = ser.astype('string')
+        if NORMALIZE_JOIN_KEYS_TRIM:
+            ser = ser.str.strip()
+        if NORMALIZE_JOIN_KEYS_CASE == 'lower':
+            ser = ser.str.lower()
+        elif NORMALIZE_JOIN_KEYS_CASE == 'upper':
+            ser = ser.str.upper()
+        return ser
+    except Exception:
+        # Fall back to original series in case of unexpected types
+        return s
+
+def _canonicalize(name: str) -> str:
+    """Canonical form for column names to allow fuzzy header matching."""
+    if name is None:
+        return ''
+    s = str(name).strip().lower()
+    for ch in ['-', ' ', '\t', '\n', '\r']:
+        s = s.replace(ch, '_')
+    while '__' in s:
+        s = s.replace('__', '_')
+    return s.strip('_')
+
+EXPECTED_COLUMNS = [
+    'Source_Project_Id', 'Source_Dataset_Id', 'Source_Table', 'Source_Join_Key',
+    'Target_Project_Id', 'Target_Dataset_Id', 'Target_Table', 'Target_Join_Key',
+    'Target_Column', 'Derivation_Logic', 'Scenario_ID', 'Scenario_Name',
+    'Reference_Table', 'Reference_Join_Key', 'Reference_Lookup_Column', 'Description'
+]
+
+def normalize_headers_and_trim(df: pd.DataFrame):
+    """Normalize headers via fuzzy matching and trim whitespace in key string columns.
+    Returns (df_normalized, rename_map).
+    """
+    if df is None or df.empty:
+        return df, {}
+    # Build reverse index from canonical header to existing name
+    canon_to_actual = {_canonicalize(c): c for c in df.columns}
+    rename_map = {}
+    for expected in EXPECTED_COLUMNS:
+        canon = _canonicalize(expected)
+        if expected in df.columns:
+            continue
+        if canon in canon_to_actual and canon_to_actual[canon] not in df.columns:
+            # unlikely branch, keep for completeness
+            pass
+        if canon in canon_to_actual and canon_to_actual[canon] != expected:
+            rename_map[canon_to_actual[canon]] = expected
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    # Trim whitespace on relevant string columns
+    trim_cols = [c for c in EXPECTED_COLUMNS if c in df.columns]
+    for col in trim_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
+    return df, rename_map
+
+def validate_scenarios_df(df: pd.DataFrame):
+    """Return (ok, errors, warnings) for input scenarios DataFrame."""
+    errors, warnings = [], []
+    if df is None:
+        return False, ["No data loaded"], warnings
+    if df.empty:
+        return False, ["Uploaded file has 0 rows"], warnings
+
+    required_upload = ['Source_Project_Id', 'Source_Dataset_Id', 'Target_Project_Id', 'Target_Dataset_Id']
+    missing_upload = [c for c in required_upload if c not in df.columns]
+    if missing_upload:
+        errors.append(f"Missing required columns: {', '.join(missing_upload)}")
+
+    validation_required = ['Source_Table', 'Source_Join_Key', 'Target_Table', 'Target_Join_Key', 'Target_Column', 'Derivation_Logic']
+    missing_validation = [c for c in validation_required if c not in df.columns]
+    if missing_validation:
+        errors.append(f"Missing validation columns: {', '.join(missing_validation)}")
+
+    # Per-row essential empties
+    essential = required_upload + ['Source_Table', 'Source_Join_Key', 'Target_Table', 'Target_Join_Key', 'Target_Column']
+    for col in essential:
+        if col in df.columns:
+            null_count = df[col].isna() | (df[col].astype(str).str.strip().isin(['', 'nan', 'None']))
+            if int(null_count.sum()) > 0:
+                errors.append(f"Column '{col}' has {int(null_count.sum())} empty/missing values")
+
+    # Scenario ID and name checks
+    if 'Scenario_ID' in df.columns:
+        dup = df['Scenario_ID'].astype(str).duplicated(keep=False)
+        if bool(dup.any()):
+            warnings.append("Duplicate Scenario_ID values detected; defaults may be applied during run.")
+    else:
+        warnings.append("Scenario_ID column missing; defaults will be generated per row.")
+    if 'Scenario_Name' not in df.columns:
+        warnings.append("Scenario_Name column missing; defaults will be generated per row.")
+
+    return len(errors) == 0, errors, warnings
 
 def initialize_client(project_id):
     """Return an authenticated bigquery.Client using ADC. Keep optional proxy lines commented."""
@@ -179,31 +322,49 @@ def extract_required_columns_by_table(row):
         table_names_to_exclude = {source_table_name, target_table_name, reference_table_name}
         table_names_to_exclude = {name for name in table_names_to_exclude if name and str(name).strip().lower() not in ['', 'nan', 'none']}
         
+        # Remove quoted string literals to avoid treating them as columns (handles '...' and "...")
+        derivation_no_strings = re.sub(r"'[^']*'|\"[^\"]*\"", ' ', derivation_str)
+
         # Enhanced regex patterns to extract column references
         column_patterns = [
             r'\b[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\b',  # table.column format
             r'\b[a-zA-Z_][a-zA-Z0-9_]*\b(?!\s*\.)'  # standalone identifiers (not followed by a dot)
         ]
         
-        all_matches = set()
+        # Collect and categorize matches by table
         for pattern in column_patterns:
-            matches = re.findall(pattern, derivation_str)
+            matches = re.findall(pattern, derivation_no_strings)
             for match in matches:
+                # Skip pure keywords
+                if match.upper() in excluded_keywords:
+                    continue
+                # Skip invalids
+                if not match or match.isdigit():
+                    continue
                 if '.' in match:
-                    # Extract column name from table.column format
                     table_part, col_part = match.split('.', 1)
-                    all_matches.add(col_part)
+                    table_part = table_part.strip()
+                    col_part = col_part.strip()
+                    # Ignore if table name token matches an excluded/full table name token
+                    if table_part in table_names_to_exclude and col_part:
+                        # Route by explicit table reference
+                        if table_part == source_table_name:
+                            required_source_columns.add(col_part)
+                        elif table_part == target_table_name:
+                            required_target_columns.add(col_part)
+                        elif table_part == reference_table_name:
+                            required_reference_columns.add(col_part)
+                        else:
+                            # Unknown table token; default to source
+                            required_source_columns.add(col_part)
+                    else:
+                        # If table token not recognized, default column attribution to source
+                        if col_part:
+                            required_source_columns.add(col_part)
                 else:
-                    # Standalone identifier
-                    all_matches.add(match)
-        
-        # Filter out keywords, table names, and invalid identifiers
-        for col in all_matches:
-            if (col.upper() not in excluded_keywords and 
-                len(col) > 1 and 
-                not col.isdigit() and
-                col not in table_names_to_exclude):
-                required_source_columns.add(col)
+                    # Standalone identifier: attribute to source unless it's a table name token
+                    if match not in table_names_to_exclude:
+                        required_source_columns.add(match)
     
     # 2. Add Source_Join_Key and Reference_Lookup_Column → SOURCE TABLE
     if source_join_key and str(source_join_key).strip().lower() not in ['', 'nan', 'none']:
@@ -427,7 +588,7 @@ def apply_derivation_logic_in_python(df, derivation_logic):
         df['derived_value'] = None
         return df, False, f"Failed to apply derivation logic: {str(e)}"
 
-def fetch_target_data_and_join(client, df_source, row):
+def fetch_target_data_and_join(client, df_source, row, cache=None):
     """
     STEP 4: Join with Target Table
     Fetch target data and join with processed source DataFrame.
@@ -440,49 +601,70 @@ def fetch_target_data_and_join(client, df_source, row):
         target_column = row.get('Target_Column', '')
         target_join_key = row.get('Target_Join_Key', '')
         source_join_key = row.get('Source_Join_Key', '')
-        
+
         # Parse join keys
         target_join_keys = [key.strip() for key in str(target_join_key).split(',') if key.strip()]
         source_join_keys = [key.strip() for key in str(source_join_key).split(',') if key.strip()]
-        
+
         # Build target query
         target_table_fq = get_fully_qualified_table_name(target_project, target_dataset, target_table)
         target_columns = target_join_keys + [target_column]
         target_column_select = ", ".join(set(target_columns))  # Remove duplicates
-        
+
         target_query = f"""
         SELECT {target_column_select}
         FROM {target_table_fq}
         WHERE {target_column} IS NOT NULL
         """
-        
-        # Execute target query
-        df_target = client.query(target_query).to_dataframe()
-        
+
+        # Execute target query with caching
+        if cache is None:
+            cache = {}
+        tgt_cache = cache.setdefault('target_df', {})
+        tgt_key = (
+            target_project, target_dataset, target_table,
+            tuple(sorted(target_join_keys + [target_column]))
+        )
+        if tgt_key in tgt_cache:
+            df_target = tgt_cache[tgt_key]
+        else:
+            df_target = client.query(target_query).to_dataframe()
+            tgt_cache[tgt_key] = df_target
+
         # Perform join
         if len(source_join_keys) == len(target_join_keys):
+            # Normalize join key dtypes and values per config
+            for key in source_join_keys:
+                if key in df_source.columns:
+                    df_source[key] = normalize_series_for_join(df_source[key])
+            for key in target_join_keys:
+                if key in df_target.columns:
+                    df_target[key] = normalize_series_for_join(df_target[key])
+
             # Create join condition
             left_on = source_join_keys
             right_on = target_join_keys
-            
+
             df_joined = df_source.merge(
-                df_target, 
-                left_on=left_on, 
-                right_on=right_on, 
+                df_target,
+                left_on=left_on,
+                right_on=right_on,
                 how='left',
-                suffixes=('', '_target')
+                suffixes=('', '_tgt')
             )
-            
-            # Rename target column to standard name
-            if target_column in df_joined.columns:
-                df_joined['actual_value'] = df_joined[target_column]
+
+            # Resolve target column possibly suffixed due to collisions
+            candidate_cols = [target_column, f"{target_column}_tgt", f"{target_column}_target"]
+            actual_col = next((c for c in candidate_cols if c in df_joined.columns), None)
+            if actual_col is not None:
+                df_joined['actual_value'] = df_joined[actual_col]
             else:
                 df_joined['actual_value'] = None
-                
+
             return df_joined, True, "Join successful"
         else:
             return df_source, False, f"Join key count mismatch: source {len(source_join_keys)}, target {len(target_join_keys)}"
-            
+
     except Exception as e:
         return df_source, False, f"Failed to join with target table: {str(e)}"
 
@@ -516,7 +698,7 @@ def calculate_validation_results(df):
         st.error(f"❌ Error calculating validation results: {e}")
         return df, 0, 0
 
-def enhanced_validation_execution(row, client, scenario_id, scenario_name, output_dir):
+def enhanced_validation_execution(row, client, scenario_id, scenario_name, failures_dir, cache=None):
     """
     Main function implementing the enhanced validation framework.
     Processes validation using unique combinations approach to avoid row-level operations.
@@ -567,9 +749,17 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, outpu
             
         unique_query = build_unique_combinations_query(
             source_project, source_dataset, source_table, required_source_columns)
-        
+
         st.write(f"📝 Executing unique combinations query...")
-        df_source = client.query(unique_query).to_dataframe()
+        if cache is None:
+            cache = {}
+        src_cache = cache.setdefault('source_unique', {})
+        src_key = (source_project, source_dataset, source_table, tuple(sorted(required_source_columns)))
+        if src_key in src_cache:
+            df_source = src_cache[src_key]
+        else:
+            df_source = client.query(unique_query).to_dataframe()
+            src_cache[src_key] = df_source
         
         if df_source.empty:
             return False, "No data returned from source query", 0, 0, None
@@ -582,18 +772,18 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, outpu
         
         if not derivation_success:
             st.warning(f"⚠️ Derivation logic issue: {derivation_message}")
-        
+
         # STEP 4: Join with Target Table
         st.write(f"🔗 Step 4: Joining with target table...")
-        df_joined, join_success, join_message = fetch_target_data_and_join(client, df_source, row)
-        
+        df_joined, join_success, join_message = fetch_target_data_and_join(client, df_source, row, cache=cache)
+
         if not join_success:
             st.warning(f"⚠️ Join issue: {join_message}")
-        
+
         # STEP 5: Calculate Validation Results
         st.write(f"🧮 Step 5: Calculating validation results...")
         df_final, total_pass, total_fail = calculate_validation_results(df_joined)
-        
+
         # STEP 6: Save Results
         st.write(f"💾 Step 6: Saving results...")
         failure_file_path = None
@@ -601,17 +791,23 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, outpu
         if total_fail > 0:
             # Save failure details
             df_failures = df_final[df_final['fail_count'] > 0].copy()
-            
-            # Create failure file
-            failure_filename = f"{scenario_id}_{scenario_name.replace(' ', '_')}_Failures.xlsx"
-            failure_file_path = os.path.join(output_dir, "ScenarioFailures", failure_filename)
-            
+
+            # Build safe filename
+            safe_name = sanitize_filename(scenario_name.replace(' ', '_'))
+            base_filename = f"{sanitize_filename(scenario_id)}_{safe_name}_Failures"
+
             # Ensure directory exists
-            os.makedirs(os.path.dirname(failure_file_path), exist_ok=True)
-            
-            # Save to Excel
-            df_failures.to_excel(failure_file_path, index=False)
-            st.write(f"💾 Saved failure details: {failure_file_path}")
+            os.makedirs(failures_dir, exist_ok=True)
+
+            # Choose CSV for very large outputs
+            if len(df_failures) > FAILURE_XLSX_MAX_ROWS:
+                failure_file_path = os.path.join(failures_dir, base_filename + '.csv')
+                df_failures.to_csv(failure_file_path, index=False)
+                st.write(f"💾 Saved large failure details as CSV ({len(df_failures):,} rows): {failure_file_path}")
+            else:
+                failure_file_path = os.path.join(failures_dir, base_filename + '.xlsx')
+                df_failures.to_excel(failure_file_path, index=False)
+                st.write(f"💾 Saved failure details: {failure_file_path}")
         
         success_message = f"Enhanced validation completed: {total_pass} passed, {total_fail} failed"
         st.success(f"✅ {success_message}")
@@ -636,7 +832,7 @@ def test_bigquery_connectivity(project_id, dataset_id, client=None):
             client = initialize_client(project_id)
         elif client.project != project_id:
             # Switch project if needed using our helper function
-            client = get_or_switch_client(project_id)
+            client = get_or_switch_client(client, project_id)
         
         # Test basic connectivity with a simple query
         test_query = f"""
@@ -664,14 +860,48 @@ def test_bigquery_connectivity(project_id, dataset_id, client=None):
         return False, f"Error: {str(e)}"
 
 def main():
-    st.title("Data Validation Framework - Enhanced Processing")
+    st.title("Data Validation Framework — Enhanced")
+
+    # Sidebar: quick guide
+    with st.sidebar:
+        st.header("How to use")
+        st.markdown(
+            "- Prepare your scenarios file (CSV or Excel) with required columns.\n"
+            "- Upload the file using the control on the right.\n"
+            "- Click 'Execute Enhanced Validation'.\n"
+            "- Monitor progress; expand details to inspect logs and results."
+        )
+        st.divider()
+        st.caption("Required columns for upload:")
+        st.code(
+            "Source_Project_Id, Source_Dataset_Id, Target_Project_Id, Target_Dataset_Id,\n"
+            "Source_Table, Source_Join_Key, Target_Table, Target_Join_Key, Target_Column, Derivation_Logic",
+            language="markdown",
+        )
     
-    # File uploader widget
-    uploaded_file = st.file_uploader(
-        "Choose a file to attach",
-        type=['csv', 'xlsx', 'xls', 'txt', 'json', 'pdf'],
-        help="Select a file to upload and attach"
-    )
+    # Top row: template download and uploader
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        # Provide a minimal template download for convenience
+        sample_csv = (
+            "Source_Project_Id,Source_Dataset_Id,Source_Table,Source_Join_Key,"
+            "Target_Project_Id,Target_Dataset_Id,Target_Table,Target_Join_Key,Target_Column,Derivation_Logic,"
+            "Scenario_ID,Scenario_Name\n"
+        )
+        st.download_button(
+            label="Download Template (CSV)",
+            data=sample_csv,
+            file_name="validation_template.csv",
+            mime="text/csv",
+            help="Start from a clean template with required columns",
+        )
+    with c2:
+        # File uploader widget
+        uploaded_file = st.file_uploader(
+            "Upload scenarios file (CSV or Excel)",
+            type=['csv', 'xlsx', 'xls'],
+            help="Select your scenarios file to run validation",
+        )
     
     # Display file information if a file is uploaded
     if uploaded_file is not None:
@@ -686,91 +916,109 @@ def main():
                     df = pd.read_csv(uploaded_file)
                 else:
                     df = pd.read_excel(uploaded_file)
-                
+
+                # Normalize headers and trim content
+                df, rename_map = normalize_headers_and_trim(df)
+                if rename_map:
+                    st.info(f"Normalized headers: {rename_map}")
+
                 st.dataframe(df.head())
-                
-                # Check for required columns and find unique combinations
-                required_columns = ['Source_Project_Id', 'Source_Dataset_Id', 'Target_Project_Id', 'Target_Dataset_Id']
-                missing_columns = [col for col in required_columns if col not in df.columns]
-                
-                if missing_columns:
-                    st.warning(f"⚠️ Warning: The following required columns are missing from the file: {', '.join(missing_columns)}")
-                    st.info("Expected columns: Source_Project_Id, Source_Dataset_Id, Target_Project_Id, Target_Dataset_Id")
-                else:
-                    st.success("✅ All required columns found!")
-                    
-                    # Store the DataFrame in session state for later use
-                    st.session_state['uploaded_df'] = df
-                    st.session_state['uploaded_file_name'] = uploaded_file.name
-                        
-                    # Validation Results Generation Section
-                    st.write("**Validation Results Generation:**")
-                    
-                    # Check for required columns for Enhanced Framework validation
-                    validation_required_columns = [
-                        'Source_Table', 'Source_Join_Key', 'Target_Table', 'Target_Join_Key', 
-                        'Target_Column', 'Derivation_Logic'
-                    ]
-                    validation_missing_columns = [col for col in validation_required_columns if col not in df.columns]
-                    
-                    if validation_missing_columns:
-                        st.warning(f"⚠️ Missing columns for validation: {', '.join(validation_missing_columns)}")
-                        st.info("Required columns: Source_Table, Source_Join_Key, Target_Table, Target_Join_Key, Target_Column, Derivation_Logic")
-                    else:
-                        st.success("✅ All validation columns found!")
-                        
-                        # Enhanced Framework is the only validation method
-                        st.write("**🔧 Validation Method:**")
-                        st.info("✅ Using Enhanced Framework - Optimized validation with unique combinations approach for better performance")
-                        
-                        # Generate validation results
-                        if st.button("Execute Enhanced Validation", type="primary"):
+
+                # Validate DataFrame
+                ok, errs, warns = validate_scenarios_df(df)
+                for w in warns:
+                    st.warning(f"{w}")
+                if not ok:
+                    for e in errs:
+                        st.error(f"{e}")
+                    st.stop()
+
+                st.success("✅ Input file passed validation checks!")
+
+                # Store the DataFrame in session state for later use
+                st.session_state['uploaded_df'] = df
+                st.session_state['uploaded_file_name'] = uploaded_file.name
+
+                # Validation Results Generation Section
+                st.write("**Validation Results Generation:**")
+
+                # Enhanced Framework is the only validation method (UI simplified)
+
+                # Generate validation results
+                # Run lock control
+                st.session_state.setdefault('is_running', False)
+                c_run1, c_run2 = st.columns([1,1])
+                with c_run1:
+                    run_clicked = st.button("Execute Enhanced Validation", type="primary", disabled=st.session_state['is_running'])
+                with c_run2:
+                    if st.button("Reset Run Lock"):
+                        st.session_state['is_running'] = False
+                        st.info("Run lock reset.")
+
+                if run_clicked:
+                    if st.session_state['is_running']:
+                        st.warning("A run is already in progress.")
+                        st.stop()
+                    st.session_state['is_running'] = True
+
+                    # Get DataFrame from session state
+                    df = st.session_state.get('uploaded_df')
+                    if df is None:
+                        st.error("❌ No uploaded data found. Please refresh and upload the file again.")
+                        st.session_state['is_running'] = False
+                        st.stop()
+
+                    # Single visible progress bar outside the detailed logs
+                    progress_bar = st.progress(0)
+
+                    # Collapsed expander for all detailed logs
+                    log = st.expander("Execution details (click to expand)", expanded=False)
+
+                    with log:
+                        st.write("🚀 **Starting Validation Process...**")
+                        tab_conn, tab_join, tab_scen, tab_files = st.tabs(["Connectivity", "Join Keys", "Scenarios", "Files"])
+
+                    # Step 1: BigQuery Connectivity Testing
+                    with tab_conn:
+                        st.write("**Step 1: BigQuery Connectivity Testing**")
                             
-                            # Get DataFrame from session state
-                            df = st.session_state.get('uploaded_df')
-                            if df is None:
-                                st.error("❌ No uploaded data found. Please refresh and upload the file again.")
-                                st.stop()
+                    # Get unique combinations for connectivity testing
+                    source_combinations = df[['Source_Project_Id', 'Source_Dataset_Id']].drop_duplicates().reset_index(drop=True)
+                    target_combinations = df[['Target_Project_Id', 'Target_Dataset_Id']].drop_duplicates().reset_index(drop=True)
                             
-                            st.write("🚀 **Starting Validation Process...**")
+                    # Initialize BigQuery client using ADC
+                    try:
+                        # Get a sample project ID from the data to initialize client
+                        sample_project = df['Source_Project_Id'].iloc[0] if 'Source_Project_Id' in df.columns else None
+
+                        if sample_project:
+                            client = initialize_client(sample_project)
+                            st.success("✅ BigQuery client initialized successfully using Application Default Credentials")
+                            # Store client in session state for reuse
+                            st.session_state['bq_client'] = client
+                        else:
+                            st.error("⚠️ Could not determine project ID for BigQuery client initialization")
+                            client = None
+                            st.session_state['bq_client'] = None
+                    except Exception as e:
+                        st.error(f"⚠️ Failed to initialize BigQuery client: {str(e)}")
+                        st.info("Please ensure Application Default Credentials are set up: `gcloud auth application-default login`")
+                        client = None
+                        st.session_state['bq_client'] = None
+
+                    if not client:
+                        st.error("🛑 **VALIDATION HALTED** - BigQuery client is required for validation.")
+                        st.session_state['is_running'] = False
+                        st.stop()
                             
-                            # Step 1: BigQuery Connectivity Testing
-                            st.write("**Step 1: BigQuery Connectivity Testing**")
-                            
-                            # Get unique combinations for connectivity testing
-                            source_combinations = df[['Source_Project_Id', 'Source_Dataset_Id']].drop_duplicates().reset_index(drop=True)
-                            target_combinations = df[['Target_Project_Id', 'Target_Dataset_Id']].drop_duplicates().reset_index(drop=True)
-                            
-                            # Initialize BigQuery client using ADC
-                            try:
-                                # Get a sample project ID from the data to initialize client
-                                sample_project = df['Source_Project_Id'].iloc[0] if 'Source_Project_Id' in df.columns else None
-                                
-                                if sample_project:
-                                    client = initialize_client(sample_project)
-                                    st.success("✅ BigQuery client initialized successfully using Application Default Credentials")
-                                    # Store client in session state for reuse
-                                    st.session_state['bq_client'] = client
-                                else:
-                                    st.error("⚠️ Could not determine project ID for BigQuery client initialization")
-                                    client = None
-                                    st.session_state['bq_client'] = None
-                            except Exception as e:
-                                st.error(f"⚠️ Failed to initialize BigQuery client: {str(e)}")
-                                st.info("Please ensure Application Default Credentials are set up: `gcloud auth application-default login`")
-                                client = None
-                                st.session_state['bq_client'] = None
-                            
-                            if not client:
-                                st.error("🛑 **VALIDATION HALTED** - BigQuery client is required for validation.")
-                                st.stop()
-                            
+                    with log:
+                        with tab_conn:
                             st.write("*Testing Source Combinations:*")
                             source_results = []
                             connectivity_failed = False
                             
-                            # Test each source combination
-                            for idx, row in source_combinations.iterrows():
+                    # Test each source combination
+                    for idx, row in source_combinations.iterrows():
                                 project_id = row['Source_Project_Id']
                                 dataset_id = row['Source_Dataset_Id']
                                 
@@ -785,15 +1033,19 @@ def main():
                                     if not success:
                                         connectivity_failed = True
                             
-                            # Display source results
+                    # Display source results
+                    with log:
+                        with tab_conn:
                             source_df = pd.DataFrame(source_results)
                             st.dataframe(source_df, use_container_width=True)
                             
+                    with log:
+                        with tab_conn:
                             st.write("*Testing Target Combinations:*")
-                            target_results = []
+                    target_results = []
                             
-                            # Test each target combination
-                            for idx, row in target_combinations.iterrows():
+                    # Test each target combination
+                    for idx, row in target_combinations.iterrows():
                                 project_id = row['Target_Project_Id']
                                 dataset_id = row['Target_Dataset_Id']
                                 
@@ -808,19 +1060,28 @@ def main():
                                     if not success:
                                         connectivity_failed = True
                             
-                            # Display target results
+                    # Display target results
+                    with log:
+                        with tab_conn:
                             target_df = pd.DataFrame(target_results)
                             st.dataframe(target_df, use_container_width=True)
                             
-                            # Check connectivity results
-                            if connectivity_failed:
+                    # Check connectivity results
+                    if connectivity_failed:
+                        with log:
+                            with tab_conn:
                                 st.error("❌ BigQuery connectivity test failed for one or more project/dataset combinations.")
                                 st.error("🛑 **VALIDATION HALTED** - All datasets must be accessible before validation can proceed.")
-                                st.stop()
+                        st.session_state['is_running'] = False
+                        st.stop()
                             
+                    with log:
+                        with tab_conn:
                             st.success("✅ All BigQuery connectivity tests passed!")
-                            
-                            # Step 2: Join Key Uniqueness Validation
+
+                    # Step 2: Join Key Uniqueness Validation
+                    with log:
+                        with tab_join:
                             st.write("**Step 2: Join Key Uniqueness Validation**")
                             
                             # Check for required columns for join key validation
@@ -828,15 +1089,20 @@ def main():
                             join_key_missing_columns = [col for col in join_key_required_columns if col not in df.columns]
                             
                             if join_key_missing_columns:
-                                st.error(f"❌ Missing columns for join key validation: {', '.join(join_key_missing_columns)}")
-                                st.info("Required columns: Source_Table, Source_Join_Key, Target_Table, Target_Join_Key")
-                                st.error("🛑 **VALIDATION HALTED** - Join key validation columns are required.")
+                                with log:
+                                    with tab_join:
+                                        st.error(f"❌ Missing columns for join key validation: {', '.join(join_key_missing_columns)}")
+                                        st.info("Required columns: Source_Table, Source_Join_Key, Target_Table, Target_Join_Key")
+                                        st.error("🛑 **VALIDATION HALTED** - Join key validation columns are required.")
+                                st.session_state['is_running'] = False
                                 st.stop()
                             
-                            st.write("*Validating Join Key Uniqueness for All Scenarios:*")
-                            
-                            # Enhancement: Avoid repeating join key checks for identical table combinations
-                            st.write("🔍 Step 2.1: Identifying unique table combinations...")
+                            with log:
+                                with tab_join:
+                                    st.write("*Validating Join Key Uniqueness for All Scenarios:*")
+                                    
+                                    # Enhancement: Avoid repeating join key checks for identical table combinations
+                                    st.write("🔍 Step 2.1: Identifying unique table combinations...")
                             
                             # Remove non-relevant columns and get unique table combinations
                             exclude_columns = ['Scenario_ID', 'Scenario_Name', 'Description', 'Derivation_Logic']
@@ -849,13 +1115,17 @@ def main():
                             
                             # Get unique combinations for join key validation
                             unique_combinations = df_for_uniqueness.drop_duplicates().reset_index(drop=True)
-                            st.write(f"✅ Reduced from {len(df)} rows to {len(unique_combinations)} unique table combinations")
+                            with log:
+                                with tab_join:
+                                    st.write(f"✅ Reduced from {len(df)} rows to {len(unique_combinations)} unique table combinations")
                             
                             # Dictionary to cache join key validation results
                             join_key_cache = {}
                             
                             # Progress bar for join key validation
-                            join_progress = st.progress(0)
+                            with log:
+                                with tab_join:
+                                    join_progress = st.progress(0)
                             
                             st.write("🔍 Step 2.2: Running join key uniqueness checks on unique combinations...")
                             
@@ -938,9 +1208,11 @@ def main():
                                 join_key_cache[cache_key] = cache_result
                             
                             # Clear progress bar
-                            join_progress.empty()
-                            
-                            st.write("🔍 Step 2.3: Building validation results table using cached results...")
+                            with log:
+                                with tab_join:
+                                    join_progress.empty()
+                                    
+                                    st.write("🔍 Step 2.3: Building validation results table using cached results...")
                             
                             # Build validation results for all original rows using cached results
                             join_key_results = []
@@ -993,30 +1265,43 @@ def main():
                             
                             # Display join key validation results
                             join_key_df = pd.DataFrame(join_key_results)
-                            st.dataframe(join_key_df, use_container_width=True)
+                            with log:
+                                with tab_join:
+                                    st.dataframe(join_key_df, use_container_width=True)
                             
                             # Store join key validation results in session state
                             st.session_state['join_key_validation_results'] = join_key_results
                             st.session_state['join_key_validation_passed'] = join_key_validation_passed
                             st.session_state['join_key_cache'] = join_key_cache  # Cache for reuse
                             
-                            st.write(f"✅ Join key validation completed using {len(join_key_cache)} unique table checks instead of {len(df)} individual checks")
+                            with log:
+                                with tab_join:
+                                    st.write(f"✅ Join key validation completed using {len(join_key_cache)} unique table checks instead of {len(df)} individual checks")
                             
                             # Show summary and handle hard stop logic
                             if join_key_validation_passed:
-                                st.success("✅ All join key uniqueness validations passed!")
+                                with log:
+                                    with tab_join:
+                                        st.success("✅ All join key uniqueness validations passed!")
                             else:
                                 if HARD_STOP_ON_UNIQUENESS:
-                                    st.error("❌ Join key uniqueness validation failed. This is a critical requirement for data validation.")
-                                    st.error("🛑 **VALIDATION HALTED** - All scenarios must have unique join keys before processing can continue.")
-                                    st.info("💡 Please resolve the uniqueness issues in your data tables before retrying validation.")
+                                    with log:
+                                        with tab_join:
+                                            st.error("❌ Join key uniqueness validation failed. This is a critical requirement for data validation.")
+                                            st.error("🛑 **VALIDATION HALTED** - All scenarios must have unique join keys before processing can continue.")
+                                            st.info("💡 Please resolve the uniqueness issues in your data tables before retrying validation.")
+                                    st.session_state['is_running'] = False
                                     st.stop()
                                 else:
-                                    st.error("❌ Some join key uniqueness validations failed. Please review the results above.")
-                                    st.warning("⚠️ Scenarios with failed join key validation will be skipped during validation processing.")
+                                    with log:
+                                        with tab_join:
+                                            st.error("❌ Some join key uniqueness validations failed. Please review the results above.")
+                                            st.warning("⚠️ Scenarios with failed join key validation will be skipped during validation processing.")
                             
                             # Step 3: Enhanced Validation Framework Execution
-                            st.write("**Step 3: Enhanced Validation Framework Execution**")
+                            with log:
+                                with tab_scen:
+                                    st.write("**Step 3: Enhanced Validation Framework Execution**")
                             
                             # Enhancement 2: Avoid redundant connectivity and join key checks
                             # (Now handled in Steps 1 & 2 above)
@@ -1035,10 +1320,14 @@ def main():
                                     join_key_lookup[scenario_id] = result['Overall_Status'] == '✅ ALL_UNIQUE'
                             
                             # Generate Excel file with execution results
-                            st.write("📊 **Excel File with Execution Results:**")
+                            with log:
+                                with tab_files:
+                                    st.write("📊 **Excel File with Execution Results:**")
                             
                             # Create a copy of the original dataframe
-                            st.write("📋 Step 1: Preparing data structures...")
+                            with log:
+                                with tab_scen:
+                                    st.write("📋 Step 1: Preparing data structures...")
                             df_with_results = df.copy()
                             
                             # Initialize lists for new columns
@@ -1047,43 +1336,84 @@ def main():
                             total_failed = []
                             overall_status = []
                             failure_files_created = []
-                            st.write("✅ Data structures initialized")
+                            with log:
+                                with tab_scen:
+                                    st.write("✅ Data structures initialized")
                             
-                            # Create output directory for failure files
-                            st.write("📁 Step 2: Setting up output directories...")
+                            # Create output directory for this run and failure files
+                            with log:
+                                with tab_files:
+                                    st.write("📁 Step 2: Setting up output directories...")
                             script_dir = os.path.dirname(os.path.abspath(__file__))
-                            output_dir = os.path.join(script_dir, "output", "ScenarioFailures")
-                            st.write(f"✅ Output directory: {output_dir}")
+                            base_output_dir = os.path.join(script_dir, "output")
+                            run_id, run_dir, failures_dir, enhanced_excel_path = make_run_output_paths(base_output_dir)
+                            with log:
+                                with tab_files:
+                                    st.write(f"✅ Run folder: {run_dir}")
+                                    st.write(f"✅ Failures folder: {failures_dir}")
+                                    # Preserve outputs toggle
+                                    preserve_outputs = st.checkbox(
+                                        "Preserve previous run outputs",
+                                        value=True,
+                                        help="If enabled, existing files in the output folder are kept. If disabled, the folder is cleaned before writing new files.",
+                                    )
+                                    # Show and open folder helpers
+                                    st.caption("Folder path (copy if needed):")
+                                    st.code(run_dir)
+                                    c_of1, c_of2 = st.columns([1, 2])
+                                    with c_of1:
+                                        if st.button("Open folder", help="Open output folder in File Explorer (Windows)"):
+                                            try:
+                                                # Windows-only convenience
+                                                os.startfile(run_dir)  # type: ignore[attr-defined]
+                                                st.info("Opened folder in File Explorer.")
+                                            except Exception:
+                                                # Fallback: try opening via file URL
+                                                import webbrowser
+                                                try:
+                                                    folder_uri = 'file:///' + run_dir.replace('\\', '/').replace('\\\n', '/')
+                                                    webbrowser.open(folder_uri)
+                                                    st.info("Attempted to open folder via default browser.")
+                                                except Exception:
+                                                    st.warning("Couldn't open folder automatically. Copy the path above.")
+                                    with c_of2:
+                                        folder_uri_md = 'file:///' + run_dir.replace('\\', '/').replace('\\\n', '/')
+                                        st.markdown(f"[Open as link]({folder_uri_md})")
                             
-                            # Clean up existing output files from previous runs
-                            st.write("🧹 Step 2.1: Cleaning up old output files...")
-                            if os.path.exists(output_dir):
+                            # Clean up existing output folders from previous runs (conditional)
+                            with log:
+                                with tab_files:
+                                    st.write("🧹 Step 2.1: Cleaning up old output files...")
+                            if os.path.exists(base_output_dir) and not preserve_outputs:
                                 try:
-                                    # Remove all files in the output directory
-                                    for filename in os.listdir(output_dir):
-                                        file_path = os.path.join(output_dir, filename)
-                                        if os.path.isfile(file_path):
-                                            os.remove(file_path)
-                                    st.info("🧹 Cleaned up old output files from previous runs.")
+                                    for entry in os.listdir(base_output_dir):
+                                        entry_path = os.path.join(base_output_dir, entry)
+                                        if entry_path == run_dir:
+                                            continue
+                                        if os.path.isdir(entry_path):
+                                            import shutil
+                                            shutil.rmtree(entry_path, ignore_errors=True)
+                                        elif os.path.isfile(entry_path):
+                                            os.remove(entry_path)
+                                    with log:
+                                        with tab_files:
+                                            st.info("🧹 Removed previous run folders from output/.")
                                 except Exception as e:
-                                    st.warning(f"⚠️ Warning: Could not clean all old files: {str(e)}")
+                                    with log:
+                                        with tab_files:
+                                            st.warning(f"⚠️ Warning: Could not clean all old files: {str(e)}")
                             else:
-                                # Create directory if it doesn't exist
-                                os.makedirs(output_dir, exist_ok=True)
-                                st.info("📁 Created new output directory.")
+                                with log:
+                                    with tab_files:
+                                        st.info("Preserving previous outputs — no cleanup performed.")
                             
-                            # Also clean up the main output Excel file
-                            enhanced_excel_path = os.path.join(script_dir, "output", "ValidationResults_Enhanced.xlsx")
-                            if os.path.exists(enhanced_excel_path):
-                                try:
-                                    os.remove(enhanced_excel_path)
-                                    st.info("🧹 Removed previous validation results Excel file.")
-                                except Exception as e:
-                                    st.warning(f"⚠️ Warning: Could not remove previous Excel file: {str(e)}")
+                            # Report will be written inside the run folder created above
                             
                             # Enhancement 2: Skip redundant client initialization - already have cached client
-                            st.write("🔌 Step 3: Using cached BigQuery client and validation results...")
-                            st.write("✅ BigQuery client and join key validation results retrieved from cache")
+                            with log:
+                                with tab_scen:
+                                    st.write("🔌 Step 3: Using cached BigQuery client and validation results...")
+                                    st.write("✅ BigQuery client and join key validation results retrieved from cache")
                             
                             # Create a lookup dictionary for join key validation results (already validated above)
                             join_key_lookup = {}
@@ -1093,12 +1423,13 @@ def main():
                                     join_key_lookup[scenario_id] = result['Overall_Status'] == '✅ ALL_UNIQUE'
                             
                             # Process each row
-                            st.write(f"🔄 Step 4: Processing {len(df)} validation scenarios with Enhanced Framework...")
-                            st.info("🚀 Performance Enhancement: Using unique combinations approach to dramatically reduce data processing volume for large datasets.")
+                            with log:
+                                with tab_scen:
+                                    st.write(f"🔄 Step 4: Processing {len(df)} validation scenarios with Enhanced Framework...")
+                                    st.info("🚀 Performance Enhancement: Using unique combinations approach to dramatically reduce data processing volume for large datasets.")
                             
-                            # Create a progress bar and status container
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
+                            # Create a status container inside the expander
+                            status_text = log.empty()
                             
                             for idx, row in df.iterrows():
                                 # Update progress
@@ -1108,14 +1439,18 @@ def main():
                                 scenario_id = str(row.get('Scenario_ID', f'SC{idx+1:03d}'))
                                 scenario_name = str(row.get('Scenario_Name', f'Scenario_{idx+1}'))
                                 
-                                status_text.write(f"🔍 Processing scenario {idx+1}/{len(df)}: {scenario_id} - {scenario_name}")
+                                with log:
+                                    with tab_scen:
+                                        status_text.write(f"🔍 Processing scenario {idx+1}/{len(df)}: {scenario_id} - {scenario_name}")
                                 
                                 # Check join key uniqueness for this scenario (per-scenario check)
                                 if not HARD_STOP_ON_UNIQUENESS:
                                     # SOFT SKIP: Check if this specific scenario has failed join key validation
                                     scenario_passed_uniqueness = join_key_lookup.get(scenario_id, True)  # Default to True if not found
                                     if not scenario_passed_uniqueness:
-                                        st.warning(f"⚠️ Skipping scenario {scenario_id} - Join key uniqueness validation failed")
+                                        with log:
+                                            with tab_scen:
+                                                st.warning(f"⚠️ Skipping scenario {scenario_id} - Join key uniqueness validation failed")
                                         # Add default values for skipped scenario
                                         processing_methods.append(f"SKIPPED - Join key uniqueness failed")
                                         total_passed.append(0)
@@ -1126,32 +1461,37 @@ def main():
                                 
                                 try:
                                     # Execute Enhanced Validation Framework (direct processing, no SQL generation)
-                                    st.write(f"🚀 Executing enhanced validation framework for scenario {scenario_id}...")
-                                    
-                                    # Show debug information in an expander
-                                    with st.expander(f"🔍 Enhanced Debug Info for {scenario_id} (Click to expand)", expanded=False):
-                                        derivation_logic = row.get('Derivation_Logic', '')
-                                        source_cols, target_cols, ref_cols = extract_required_columns_by_table(row)
-                                        
-                                        st.write(f"**Derivation Logic:** `{derivation_logic}`")
-                                        st.write(f"**Table-Specific Column Requirements:**")
-                                        st.write(f"   • Source table columns: `{sorted(source_cols) if source_cols else 'None'}`")
-                                        st.write(f"   • Target table columns: `{sorted(target_cols) if target_cols else 'None'}`")
-                                        if ref_cols:
-                                            st.write(f"   • Reference table columns: `{sorted(ref_cols)}`")
-                                        
-                                        st.write(f"**Table Information:**")
-                                        st.write(f"   • Source Table: `{row.get('Source_Project_Id')}.{row.get('Source_Dataset_Id')}.{row.get('Source_Table')}`")
-                                        st.write(f"   • Target Table: `{row.get('Target_Project_Id')}.{row.get('Target_Dataset_Id')}.{row.get('Target_Table')}`")
-                                        if row.get('Reference_Table') and str(row.get('Reference_Table')).strip().lower() != 'nan':
-                                            st.write(f"   • Reference Table: `{row.get('Source_Project_Id')}.{row.get('Source_Dataset_Id')}.{row.get('Reference_Table')}`")
+                                    with log:
+                                        with tab_scen:
+                                            st.write(f"🚀 Executing enhanced validation framework for scenario {scenario_id}...")
+                                            
+                                            # Show debug information (no nested expander inside the main log expander)
+                                            with st.container():
+                                                st.caption(f"Enhanced Debug Info for {scenario_id}")
+                                            derivation_logic = row.get('Derivation_Logic', '')
+                                            source_cols, target_cols, ref_cols = extract_required_columns_by_table(row)
+                                            
+                                            st.write(f"**Derivation Logic:** `{derivation_logic}`")
+                                            st.write(f"**Table-Specific Column Requirements:**")
+                                            st.write(f"   • Source table columns: `{sorted(source_cols) if source_cols else 'None'}`")
+                                            st.write(f"   • Target table columns: `{sorted(target_cols) if target_cols else 'None'}`")
+                                            if ref_cols:
+                                                st.write(f"   • Reference table columns: `{sorted(ref_cols)}`")
+                                            
+                                            st.write(f"**Table Information:**")
+                                            st.write(f"   • Source Table: `{row.get('Source_Project_Id')}.{row.get('Source_Dataset_Id')}.{row.get('Source_Table')}`")
+                                            st.write(f"   • Target Table: `{row.get('Target_Project_Id')}.{row.get('Target_Dataset_Id')}.{row.get('Target_Table')}`")
+                                            if row.get('Reference_Table') and str(row.get('Reference_Table')).strip().lower() != 'nan':
+                                                st.write(f"   • Reference Table: `{row.get('Source_Project_Id')}.{row.get('Source_Dataset_Id')}.{row.get('Reference_Table')}`")
                                     
                                     success, message, pass_count, fail_count, failure_file_path = enhanced_validation_execution(
-                                        row, client, scenario_id, scenario_name, output_dir
+                                        row, client, scenario_id, scenario_name, failures_dir, cache=st.session_state.setdefault('execution_cache', {})
                                     )
                                     
                                     if success:
-                                        st.write(f"✅ Scenario {scenario_id}: {pass_count} PASS, {fail_count} FAIL (enhanced)")
+                                        with log:
+                                            with tab_scen:
+                                                st.write(f"✅ Scenario {scenario_id}: {pass_count} PASS, {fail_count} FAIL (enhanced)")
                                         total_passed.append(pass_count)
                                         total_failed.append(fail_count)
                                         # Set overall status: PASS if no failures, FAIL if any failures
@@ -1162,16 +1502,22 @@ def main():
                                         # Track failure file creation
                                         if failure_file_path:
                                             if failure_file_path.startswith("SKIPPED"):
-                                                st.write(f"⚠️ Scenario {scenario_id}: {failure_file_path}")
+                                                with log:
+                                                    with tab_files:
+                                                        st.write(f"⚠️ Scenario {scenario_id}: {failure_file_path}")
                                                 failure_files_created.append(failure_file_path)
                                             else:
                                                 relative_path = os.path.relpath(failure_file_path, script_dir)
-                                                st.write(f"📄 Failure file created: {relative_path}")
+                                                with log:
+                                                    with tab_files:
+                                                        st.write(f"📄 Failure file created: {relative_path}")
                                                 failure_files_created.append(relative_path)
                                         else:
                                             failure_files_created.append("No failures")
                                     else:
-                                        st.error(f"❌ Scenario {scenario_id} execution failed: {message}")
+                                        with log:
+                                            with tab_scen:
+                                                st.error(f"❌ Scenario {scenario_id} execution failed: {message}")
                                         # If execution failed, set default values
                                         processing_methods.append(f"EXECUTION_ERROR - {message}")
                                         total_passed.append(0)
@@ -1182,7 +1528,9 @@ def main():
                                 except ValueError as ve:
                                     # Handle uniqueness validation errors specifically
                                     if "do not uniquely identify rows" in str(ve):
-                                        st.error(f"❌ Join key uniqueness validation failed for scenario {scenario_id}: {str(ve)}")
+                                        with log:
+                                            with tab_join:
+                                                st.error(f"❌ Join key uniqueness validation failed for scenario {scenario_id}: {str(ve)}")
                                         # Add default values for failed scenario
                                         processing_methods.append(f"UNIQUENESS_ERROR - {str(ve)}")
                                         total_passed.append(0)
@@ -1190,7 +1538,9 @@ def main():
                                         overall_status.append('UNIQUENESS_ERROR')
                                         failure_files_created.append(f"Uniqueness Error: {str(ve)}")
                                     else:
-                                        st.error(f"❌ Validation error for scenario {scenario_id}: {str(ve)}")
+                                        with log:
+                                            with tab_scen:
+                                                st.error(f"❌ Validation error for scenario {scenario_id}: {str(ve)}")
                                         # Add default values for failed scenario
                                         processing_methods.append(f"VALIDATION_ERROR - {str(ve)}")
                                         total_passed.append(0)
@@ -1198,7 +1548,9 @@ def main():
                                         overall_status.append('VALIDATION_ERROR')
                                         failure_files_created.append(f"Validation Error: {str(ve)}")
                                 except Exception as e:
-                                    st.error(f"❌ Error processing scenario {scenario_id}: {str(e)}")
+                                    with log:
+                                        with tab_scen:
+                                            st.error(f"❌ Error processing scenario {scenario_id}: {str(e)}")
                                     # Add default values for failed scenario
                                     processing_methods.append(f"PROCESSING_ERROR - {str(e)}")
                                     total_passed.append(0)
@@ -1208,9 +1560,11 @@ def main():
                             
                             # Clear progress indicators
                             progress_bar.empty()
-                            status_text.empty()
-                            
-                            st.write("💾 Step 5: Saving results to Excel file...")
+                            with log:
+                                with tab_files:
+                                    status_text.empty()
+                                    
+                                    st.write("💾 Step 5: Saving results to Excel file...")
                             
                             # Add the new columns to dataframe
                             df_with_results['Processing_Method'] = processing_methods
@@ -1219,14 +1573,17 @@ def main():
                             df_with_results['Overall_Status'] = overall_status
                             df_with_results['Failure_File_Path'] = failure_files_created
                             
-                            # Save enhanced Excel file to output directory
-                            enhanced_excel_path = os.path.join(script_dir, "output", "ValidationResults_Enhanced.xlsx")
+                            # Save enhanced Excel file into this run's directory
                             os.makedirs(os.path.dirname(enhanced_excel_path), exist_ok=True)
-                            st.write(f"📁 Creating Excel file: {enhanced_excel_path}")
+                            with log:
+                                with tab_files:
+                                    st.write(f"📁 Creating Excel file: {enhanced_excel_path}")
                             
                             # Write to Excel file in output directory
                             with pd.ExcelWriter(enhanced_excel_path, engine='openpyxl') as writer:
-                                st.write("📝 Writing Results sheet...")
+                                with log:
+                                    with tab_files:
+                                        st.write("📝 Writing Results sheet...")
                                 # Create Results sheet with specified columns in order (FIRST TAB)
                                 results_columns = [
                                     'Scenario_ID', 'Scenario_Name', 'Description', 'Total_Failed', 
@@ -1255,7 +1612,9 @@ def main():
                                     adjusted_width = min(max_length + 2, 50)
                                     results_worksheet.column_dimensions[column_letter].width = adjusted_width
                                 
-                                st.write("📝 Writing ValidationScenarios sheet...")
+                                with log:
+                                    with tab_files:
+                                        st.write("📝 Writing ValidationScenarios sheet...")
                                 # Create ValidationScenarios sheet excluding execution result columns (SECOND TAB)
                                 validation_exclude_columns = ['Processing_Method', 'Total_Passed', 'Total_Failed', 'Overall_Status', 'Failure_File_Path']
                                 df_validation = df_with_results.drop(columns=[col for col in validation_exclude_columns if col in df_with_results.columns])
@@ -1278,50 +1637,83 @@ def main():
                                     adjusted_width = min(max_length + 2, 50)
                                     worksheet.column_dimensions[column_letter].width = adjusted_width
                             
-                            st.write("✅ Excel file created successfully!")
+                            with log:
+                                with tab_files:
+                                    st.write("✅ Excel file created successfully!")
                             
                             # Show summary statistics
-                            st.write("📊 **Final Execution Summary:**")
-                            summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+                            # Compute final counts for minimal summary outside the expander
+                            total_scenarios = len(df_with_results)
+                            passed_scenarios = len(df_with_results[df_with_results['Overall_Status'] == 'PASS'])
+                            failed_scenarios = len(df_with_results[df_with_results['Overall_Status'] == 'FAIL'])
+                            failure_files_count = len([f for f in failure_files_created if f not in ["No failures", "Execution failed", "No BigQuery client"] and not f.startswith("SKIPPED")])
                             
-                            with summary_col1:
-                                total_scenarios = len(df_with_results)
-                                st.metric("Total Scenarios", total_scenarios)
-                            
-                            with summary_col2:
-                                passed_scenarios = len(df_with_results[df_with_results['Overall_Status'] == 'PASS'])
-                                st.metric("Scenarios Passed", passed_scenarios)
-                            
-                            with summary_col3:
-                                failed_scenarios = len(df_with_results[df_with_results['Overall_Status'] == 'FAIL'])
-                                st.metric("Scenarios Failed", failed_scenarios)
-                            
-                            with summary_col4:
-                                failure_files_count = len([f for f in failure_files_created if f not in ["No failures", "Execution failed", "No BigQuery client"] and not f.startswith("SKIPPED")])
-                                st.metric("Failure Files Created", failure_files_count)
+                            # Detailed summary inside expander
+                            with log:
+                                st.write("📊 **Final Execution Summary (detailed):**")
+                                summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+                                with summary_col1:
+                                    st.metric("Total Scenarios", total_scenarios)
+                                with summary_col2:
+                                    st.metric("Scenarios Passed", passed_scenarios)
+                                with summary_col3:
+                                    st.metric("Scenarios Failed", failed_scenarios)
+                                with summary_col4:
+                                    st.metric("Failure Files Created", failure_files_count)
                             
                             # Show information about all created files
-                            st.write("**Created Files:**")
-                            enhanced_excel_relative_path = os.path.relpath(enhanced_excel_path, script_dir)
-                            st.write(f"📄 **Main Report:** {enhanced_excel_relative_path}")
+                            with log:
+                                with tab_files:
+                                    st.write("**Created Files:**")
+                                    enhanced_excel_relative_path = os.path.relpath(enhanced_excel_path, script_dir)
+                                    st.write(f"📄 **Main Report:** {enhanced_excel_relative_path}")
                             
                             # Show created failure files
                             if failure_files_count > 0:
-                                st.write(f"📋 **Individual Failure Files ({failure_files_count}):**")
-                                failure_files_list = [f for f in failure_files_created if f not in ["No failures", "Execution failed", "No BigQuery client"] and not f.startswith("SKIPPED")]
-                                for file_path in failure_files_list:
-                                    st.write(f"   • {file_path}")
+                                with log:
+                                    with tab_files:
+                                        st.write(f"📋 **Individual Failure Files ({failure_files_count}):**")
+                                        failure_files_list = [f for f in failure_files_created if f not in ["No failures", "Execution failed", "No BigQuery client"] and not f.startswith("SKIPPED")]
+                                        for file_path in failure_files_list:
+                                            st.write(f"   • {file_path}")
                             
                             # Show skipped files due to size limit
                             skipped_files = [f for f in failure_files_created if f.startswith("SKIPPED")]
                             if skipped_files:
-                                st.write(f"⚠️ **Skipped Files Due to Size Limit (>10,000 rows):**")
-                                for skipped_file in skipped_files:
-                                    st.write(f"   • {skipped_file}")
+                                with log:
+                                    with tab_files:
+                                        st.write(f"⚠️ **Skipped Files Due to Size Limit (>10,000 rows):**")
+                                        for skipped_file in skipped_files:
+                                            st.write(f"   • {skipped_file}")
                             
-                            st.info(f"💡 All validation files have been saved to the `output/` directory.")
-                            
-                            st.success("✅ Enhanced validation completed! All result files and individual failure files have been created!")
+                            with log:
+                                with tab_files:
+                                    st.info(f"💡 All validation files have been saved to the `output/` directory.")
+                                    st.success("✅ Enhanced validation completed! All result files and individual failure files have been created!")
+                                    st.session_state['is_running'] = False
+
+                            # Minimal final result summary outside the expander (with download)
+                            st.write("")
+                            with st.container(border=True):
+                                st.subheader("Summary")
+                                summary_col1, summary_col2, summary_col3, summary_col4 = st.columns([1,1,1,2])
+                                with summary_col1:
+                                    st.metric("Total", total_scenarios)
+                                with summary_col2:
+                                    st.metric("Passed", passed_scenarios)
+                                with summary_col3:
+                                    st.metric("Failed", failed_scenarios)
+                                with summary_col4:
+                                    try:
+                                        with open(enhanced_excel_path, "rb") as f:
+                                            st.download_button(
+                                                label="Download Report (XLSX)",
+                                                data=f,
+                                                file_name=os.path.basename(enhanced_excel_path),
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            )
+                                    except Exception:
+                                        pass
                         
             except Exception as e:
                 st.error(f"Error reading file: {e}")
