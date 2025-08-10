@@ -352,27 +352,31 @@ derived AS (
         {sel_key_aliases}{"," if sel_key_aliases else ""} ({drv_sql}) AS derived_value, row_count
     FROM unique_src
 ),
-tgt AS (
+unique_tgt AS (
     SELECT
         {", ".join(tgt_k_norm) if tgt_k_norm else "/* no keys */"},
-        CAST({tgt_col} AS STRING) AS actual_value
+        CAST({tgt_col} AS STRING) AS actual_value,
+        COUNT(*) AS target_count
     FROM `{tgt_proj}.{tgt_ds}.{tgt_tbl}`
     -- Include ALL target records (including NULLs) for complete validation coverage
+    GROUP BY {", ".join([f"tk{i+1}" for i in range(len(tgt_keys))]) if tgt_keys else "/* no group by */"}, CAST({tgt_col} AS STRING)
 ),
 joined AS (
     SELECT
         {sel_key_aliases}{"," if sel_key_aliases else ""} d.derived_value,
-        d.row_count,
-        t.actual_value
+        d.row_count AS source_count,
+        COALESCE(t.actual_value, NULL) AS actual_value,
+        COALESCE(t.target_count, 0) AS target_count
     FROM derived d
-    LEFT JOIN tgt t
+    LEFT JOIN unique_tgt t
         ON {join_cond}
 ),
 scored AS (
     SELECT
         derived_value,
         actual_value,
-        row_count,
+        source_count,
+        target_count,
         -- Strict NULL-aware comparison: unexpected NULLs in target are treated as errors
         CASE 
             -- Both NULL: PASS
@@ -386,8 +390,9 @@ scored AS (
     FROM joined
 )
 SELECT
-    SUM(CASE WHEN status THEN row_count ELSE 0 END) AS total_pass,
-    SUM(CASE WHEN NOT status THEN row_count ELSE 0 END) AS total_fail
+    -- Weight by TARGET count (not source count) for accurate validation totals
+    SUM(CASE WHEN status THEN target_count ELSE 0 END) AS total_pass,
+    SUM(CASE WHEN NOT status THEN target_count ELSE 0 END) AS total_fail
 FROM scored
 """
         return sql
