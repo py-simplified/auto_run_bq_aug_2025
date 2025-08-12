@@ -207,7 +207,8 @@ def generate_sql_for_scenario(row: dict,
         # Build normalized key projections
         src_k_norm = [f"{normalize_key_sql('s.' + k)} AS k{i+1}" for i, k in enumerate(src_keys)]
         tgt_k_norm = [f"{normalize_key_sql(k)} AS tk{i+1}" for i, k in enumerate(tgt_keys)]
-        join_cond  = " AND ".join([f"d.k{i+1} = t.tk{i+1}" for i in range(len(src_keys))]) or "1=1"
+        # Use NULL-safe equality for join condition to handle NULL join keys properly
+        join_cond  = " AND ".join([f"d.k{i+1} IS NOT DISTINCT FROM t.tk{i+1}" for i in range(len(src_keys))]) or "1=1"
 
         # Column projections based on table-aware column requirements
         # Source columns needed = derivation inputs from source table ∪ src join keys ∪ ref lookup cols
@@ -1127,6 +1128,49 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, failu
         print("Generated SQL:")
         print(sql)
         print("=== END SQL DEBUG ===\n")
+        
+        # Check for NULL join keys in both source and target tables
+        st.write("🔍 Checking for NULL values in join keys...")
+        null_key_warnings = []
+        
+        # Check source join keys for NULLs
+        if s_keys:
+            src_table_path = f"`{row.get('Source_Project_Id')}.{row.get('Source_Dataset_Id')}.{row.get('Source_Table')}`"
+            for i, key in enumerate(s_keys):
+                null_check_sql = f"""
+                SELECT COUNT(*) as null_count 
+                FROM {src_table_path} 
+                WHERE {key} IS NULL
+                """
+                try:
+                    result = client.query(null_check_sql).result()
+                    null_count = list(result)[0].null_count
+                    if null_count > 0:
+                        null_key_warnings.append(f"⚠️ Source join key '{key}': {null_count} NULL values found")
+                        st.warning(f"⚠️ Source join key '{key}' has {null_count} NULL values")
+                except Exception as e:
+                    st.info(f"ℹ️ Could not check NULL values in source key '{key}': {str(e)}")
+        
+        # Check target join keys for NULLs  
+        if t_keys:
+            tgt_table_path = f"`{row.get('Target_Project_Id')}.{row.get('Target_Dataset_Id')}.{row.get('Target_Table')}`"
+            for i, key in enumerate(t_keys):
+                null_check_sql = f"""
+                SELECT COUNT(*) as null_count 
+                FROM {tgt_table_path} 
+                WHERE {key} IS NULL
+                """
+                try:
+                    result = client.query(null_check_sql).result()
+                    null_count = list(result)[0].null_count
+                    if null_count > 0:
+                        null_key_warnings.append(f"⚠️ Target join key '{key}': {null_count} NULL values found")
+                        st.warning(f"⚠️ Target join key '{key}' has {null_count} NULL values")
+                except Exception as e:
+                    st.info(f"ℹ️ Could not check NULL values in target key '{key}': {str(e)}")
+        
+        if null_key_warnings:
+            st.info("ℹ️ NULL-safe join (IS NOT DISTINCT FROM) is being used to handle NULL join keys properly")
         
         query_job = client.query(sql)
         res = query_job.result(timeout=600)
