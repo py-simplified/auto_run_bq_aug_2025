@@ -1122,6 +1122,12 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, failu
         )
 
         # Execute aggregate query
+        # DEBUG: Print the SQL being executed
+        print(f"\n=== SQL DEBUG FOR {scenario_id} ===")
+        print("Generated SQL:")
+        print(sql)
+        print("=== END SQL DEBUG ===\n")
+        
         query_job = client.query(sql)
         res = query_job.result(timeout=600)
 
@@ -1130,8 +1136,87 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, failu
             total_pass = int(getattr(r, 'total_pass', 0) or 0)
             total_fail = int(getattr(r, 'total_fail', 0) or 0)
 
-        # Optional: materialize failures to BQ table instead of local files
+        # Generate failure reports based on total_fail count
         failure_file_path = "No failures"
+        if total_fail > 0:
+            try:
+                # Create detailed failure report by re-executing the SQL with failure details
+                # Find the final SELECT statement and replace it
+                if "SUM(CASE WHEN status THEN target_count ELSE 0 END) AS total_pass" in sql:
+                    # More flexible replacement - replace the entire final SELECT block
+                    pattern_start = sql.rfind("SELECT")
+                    if pattern_start != -1:
+                        # Replace from the last SELECT to the end
+                        sql_before_select = sql[:pattern_start]
+                        failures_sql = sql_before_select + """SELECT
+    derived_value,
+    actual_value,
+    source_count,
+    target_count,
+    status
+FROM scored
+WHERE NOT status"""
+                    else:
+                        # Fallback: try the original replacement
+                        failures_sql = sql.replace(
+                            "SUM(CASE WHEN status THEN target_count ELSE 0 END) AS total_pass,  \n    SUM(CASE WHEN NOT status THEN target_count ELSE 0 END) AS total_fai",
+                            "derived_value,\n    actual_value,\n    source_count,\n    target_count,\n    status\nFROM scored\nWHERE NOT status\n-- Original:"
+                        )
+                else:
+                    failures_sql = sql + "\n-- Failed to create failure SQL"
+                
+                print(f"\n=== FAILURES SQL DEBUG ===")
+                print("Failures SQL:")
+                print(failures_sql)
+                print("=== END FAILURES SQL DEBUG ===\n")
+                
+                failures_df = client.query(failures_sql).to_dataframe()
+                
+                # DEBUG: Print available columns
+                print(f"\n=== FAILURES DF DEBUG ===")
+                print(f"Scenario: {scenario_id}")
+                print(f"Failures DF columns: {list(failures_df.columns) if not failures_df.empty else 'EMPTY DATAFRAME'}")
+                print(f"Failures DF shape: {failures_df.shape}")
+                if not failures_df.empty:
+                    print(f"First few rows:\n{failures_df.head()}")
+                print("=== END FAILURES DEBUG ===\n")
+                
+                if not failures_df.empty and failures_dir:
+                    # Create Excel file for failures
+                    safe_scenario_name = sanitize_filename(scenario_name or scenario_id)
+                    failure_filename = f"{scenario_id}_{safe_scenario_name}_Failures.xlsx"
+                    failure_file_path = os.path.join(failures_dir, failure_filename)
+                    
+                    # Add metadata to the failures
+                    failures_df['Scenario_ID'] = scenario_id
+                    failures_df['Scenario_Name'] = scenario_name or scenario_id
+                    
+                    # Safely map columns - check if they exist first
+                    if 'derived_value' in failures_df.columns:
+                        failures_df['Expected_Value'] = failures_df['derived_value']
+                    else:
+                        failures_df['Expected_Value'] = 'Column not found: derived_value'
+                        
+                    if 'actual_value' in failures_df.columns:
+                        failures_df['Actual_Value'] = failures_df['actual_value']
+                    else:
+                        failures_df['Actual_Value'] = 'Column not found: actual_value'
+                    failures_df['Record_Count'] = failures_df['target_count']
+                    
+                    # Select and rename columns for clarity
+                    output_df = failures_df[['Scenario_ID', 'Scenario_Name', 'Expected_Value', 'Actual_Value', 'Record_Count']].copy()
+                    
+                    # Write to Excel
+                    output_df.to_excel(failure_file_path, index=False, engine='openpyxl')
+                    st.write(f"📄 Created failure report: {failure_filename}")
+                else:
+                    failure_file_path = "SKIPPED: No failure details available"
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Failed to generate failure report: {e}")
+                failure_file_path = "Execution failed"
+
+        # Optional: also materialize failures to BQ table if enabled
         if total_fail > 0 and MATERIALIZE_FAILURES_TO_BQ:
             try:
                 run_id = os.path.basename(os.path.dirname(failures_dir)) if failures_dir else datetime.now().strftime('run_%Y%m%d_%H%M%S')
@@ -1140,20 +1225,29 @@ def enhanced_validation_execution(row, client, scenario_id, scenario_name, failu
                 out_project = row.get('Source_Project_Id')
                 out_dataset = row.get('Source_Dataset_Id')
                 out_table = f"failures_{run_id}_{sanitize_filename(scenario_id)}"
-                failure_file_path = f"`{out_project}.{out_dataset}.{out_table}`"
-                st.write(f"💾 Materialized failures to {failure_file_path}")
+                bq_table_path = f"`{out_project}.{out_dataset}.{out_table}`"
+                st.write(f"💾 Also materialized failures to {bq_table_path}")
             except Exception as e:
                 st.warning(f"⚠️ Failed to materialize failures to BigQuery: {e}")
 
         success_message = f"Enhanced validation (SQL) completed: {total_pass} passed, {total_fail} failed"
         st.success(f"✅ {success_message}")
         
-        return True, success_message, total_pass, total_fail, failure_file_path
+        return True, success_message, total_pass, total_fail, failure_file_path, sql
         
     except Exception as e:
-        error_msg = f"Enhanced validation failed: {str(e)}"
-        st.error(f"❌ {error_msg}")
-        return False, error_msg, 0, 0, None
+        import traceback
+        full_traceback = traceback.format_exc()
+        error_msg = f"Enhanced validation failed for {scenario_id}: {str(e)}\n\nFull traceback:\n{full_traceback}"
+        st.error(f"❌ Enhanced validation failed for {scenario_id}: {str(e)}")
+        st.error(f"📝 Full error details:\n```\n{full_traceback}\n```")
+        # Also print to console for debugging
+        print(f"\n=== S005 DEBUG INFO ===")
+        print(f"Scenario ID: {scenario_id}")
+        print(f"Error: {str(e)}")
+        print(f"Full traceback:\n{full_traceback}")
+        print("=== END DEBUG INFO ===\n")
+        return False, error_msg, 0, 0, None, "-- SQL generation failed due to error --"
 
 def test_bigquery_connectivity(project_id, dataset_id, client=None):
     """
@@ -1197,6 +1291,48 @@ def test_bigquery_connectivity(project_id, dataset_id, client=None):
 
 def main():
     st.title("Data Validation Framework — Enhanced")
+
+    # Display completion banner if validation results are available
+    if 'validation_results' in st.session_state:
+        results = st.session_state['validation_results']
+        total_records_passed = results.get('total_passed', 0)
+        total_records_failed = results.get('total_failed', 0)
+        total_records = total_records_passed + total_records_failed
+        passed_scenarios = results.get('passed_scenarios', 0)
+        total_scenarios = results.get('total_scenarios', 0)
+        
+        if total_records > 0:
+            pass_rate = (total_records_passed / total_records * 100)
+            
+            if total_records_failed == 0:
+                st.success(
+                    f"🎉 **VALIDATION COMPLETE - ALL PASSED!** | "
+                    f"{total_records_passed:,} records validated ✅ | "
+                    f"{passed_scenarios}/{total_scenarios} scenarios passed | "
+                    f"Pass Rate: {pass_rate:.1f}%"
+                )
+            else:
+                st.error(
+                    f"⚠️ **VALIDATION COMPLETE - ISSUES FOUND!** | "
+                    f"{total_records_failed:,} records failed ❌ | "
+                    f"{total_records_passed:,} records passed ✅ | "
+                    f"Pass Rate: {pass_rate:.1f}%"
+                )
+            
+            # Quick action buttons
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                if st.button("🔄 Run New Validation", type="secondary"):
+                    # Clear session state to start fresh
+                    for key in ['validation_results', 'uploaded_df', 'uploaded_file_name']:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun()
+            with col2:
+                if st.button("📊 View Details", type="secondary"):
+                    st.info("👇 Scroll down to see detailed results and download reports")
+            
+            st.divider()
 
     # Sidebar: quick guide
     with st.sidebar:
@@ -1672,6 +1808,7 @@ def main():
                             total_failed = []
                             overall_status = []
                             failure_files_created = []
+                            sql_queries = []  # New list to store SQL queries
                             with log:
                                 with tab_scen:
                                     st.write("✅ Data structures initialized")
@@ -1793,6 +1930,7 @@ def main():
                                         total_failed.append(0)
                                         overall_status.append('SKIPPED')
                                         failure_files_created.append("Skipped due to join key uniqueness failure")
+                                        sql_queries.append("-- Scenario skipped --")
                                         continue  # Skip to next scenario
                                 
                                 try:
@@ -1830,7 +1968,7 @@ def main():
                                             st.write(f"**SQL Query:**")
                                             st.code(sql, language="sql")
                                     
-                                    success, message, pass_count, fail_count, failure_file_path = enhanced_validation_execution(
+                                    success, message, pass_count, fail_count, failure_file_path, executed_sql = enhanced_validation_execution(
                                         row, client, scenario_id, scenario_name, failures_dir, cache=st.session_state.setdefault('execution_cache', {})
                                     )
                                     
@@ -1844,6 +1982,8 @@ def main():
                                         overall_status.append('PASS' if fail_count == 0 else 'FAIL')
                                         # Enhanced Framework processing completed successfully
                                         processing_methods.append("Enhanced Framework - SQL Pushdown")
+                                        # Store the executed SQL query
+                                        sql_queries.append(executed_sql if executed_sql else "No SQL available")
                                         
                                         # Track failure file creation
                                         if failure_file_path:
@@ -1877,7 +2017,10 @@ def main():
                                         total_passed.append(0)
                                         total_failed.append(0)
                                         overall_status.append('EXECUTION_ERROR')
-                                        failure_files_created.append("Execution failed")
+                                        # Use the actual error message instead of generic "Execution failed"
+                                        failure_files_created.append(f"EXECUTION_ERROR - {message}")
+                                        # Store error SQL or indicate failure
+                                        sql_queries.append(executed_sql if executed_sql else "-- SQL execution failed --")
                                         
                                 except ValueError as ve:
                                     # Handle uniqueness validation errors specifically
@@ -1891,6 +2034,7 @@ def main():
                                         total_failed.append(0)
                                         overall_status.append('UNIQUENESS_ERROR')
                                         failure_files_created.append(f"Uniqueness Error: {str(ve)}")
+                                        sql_queries.append("-- Uniqueness validation failed --")
                                     else:
                                         with log:
                                             with tab_scen:
@@ -1901,6 +2045,7 @@ def main():
                                         total_failed.append(0)
                                         overall_status.append('VALIDATION_ERROR')
                                         failure_files_created.append(f"Validation Error: {str(ve)}")
+                                        sql_queries.append("-- Validation error occurred --")
                                 except Exception as e:
                                     with log:
                                         with tab_scen:
@@ -1911,6 +2056,7 @@ def main():
                                     total_failed.append(0)
                                     overall_status.append('ERROR')
                                     failure_files_created.append(f"Error: {str(e)}")
+                                    sql_queries.append("-- Processing error occurred --")
                             
                             # Clear progress indicators
                             progress_bar.empty()
@@ -1926,6 +2072,7 @@ def main():
                             df_with_results['Total_Failed'] = total_failed
                             df_with_results['Overall_Status'] = overall_status
                             df_with_results['Failure_File_Path'] = failure_files_created
+                            df_with_results['SQL_Query'] = sql_queries  # Add SQL column
                             
                             # Save enhanced Excel file into this run's directory
                             os.makedirs(os.path.dirname(enhanced_excel_path), exist_ok=True)
@@ -2046,28 +2193,128 @@ def main():
                                     st.success("✅ Enhanced validation completed! All result files and individual failure files have been created!")
                                     st.session_state['is_running'] = False
 
-                            # Minimal final result summary outside the expander (with download)
+                            # Calculate aggregate totals
+                            total_records_passed = sum(total_passed) if total_passed else 0
+                            total_records_failed = sum(total_failed) if total_failed else 0
+                            total_records_validated = total_records_passed + total_records_failed
+                            
+                            # Store validation results in session state for banner display
+                            st.session_state['validation_results'] = {
+                                'total_passed': total_records_passed,
+                                'total_failed': total_records_failed,
+                                'total_records': total_records_validated,
+                                'passed_scenarios': passed_scenarios,
+                                'failed_scenarios': failed_scenarios,
+                                'total_scenarios': total_scenarios
+                            }
+
+                            # Enhanced final result summary with validation totals
                             st.write("")
+                            
+                            pass_percentage = (total_records_passed / total_records_validated * 100) if total_records_validated > 0 else 0
+                            
+                            # Main Results Display
                             with st.container(border=True):
-                                st.subheader("Summary")
-                                summary_col1, summary_col2, summary_col3, summary_col4 = st.columns([1,1,1,2])
-                                with summary_col1:
-                                    st.metric("Total", total_scenarios)
-                                with summary_col2:
-                                    st.metric("Passed", passed_scenarios)
-                                with summary_col3:
-                                    st.metric("Failed", failed_scenarios)
-                                with summary_col4:
+                                st.subheader("🎯 Validation Results")
+                                
+                                # Record-level metrics (most important)
+                                st.write("**📊 Record Validation Totals:**")
+                                results_col1, results_col2, results_col3, results_col4 = st.columns(4)
+                                
+                                with results_col1:
+                                    st.metric(
+                                        "Total Records", 
+                                        f"{total_records_validated:,}",
+                                        help="Total number of target records validated"
+                                    )
+                                with results_col2:
+                                    st.metric(
+                                        "✅ Passed", 
+                                        f"{total_records_passed:,}",
+                                        f"{pass_percentage:.1f}%",
+                                        delta_color="normal"
+                                    )
+                                with results_col3:
+                                    fail_percentage = 100 - pass_percentage if total_records_validated > 0 else 0
+                                    st.metric(
+                                        "❌ Failed", 
+                                        f"{total_records_failed:,}",
+                                        f"{fail_percentage:.1f}%",
+                                        delta_color="inverse"
+                                    )
+                                with results_col4:
+                                    overall_status = "🟢 PASS" if failed_scenarios == 0 else "🔴 FAIL"
+                                    st.metric("Overall Status", overall_status)
+                                
+                                st.write("")
+                                
+                                # Scenario-level summary (secondary)
+                                st.write("**📋 Scenario Summary:**")
+                                scenario_col1, scenario_col2, scenario_col3, scenario_col4 = st.columns([1,1,1,2])
+                                
+                                with scenario_col1:
+                                    st.metric("Total Scenarios", total_scenarios)
+                                with scenario_col2:
+                                    st.metric("Scenarios Passed", passed_scenarios)
+                                with scenario_col3:
+                                    st.metric("Scenarios Failed", failed_scenarios)
+                                with scenario_col4:
                                     try:
                                         with open(enhanced_excel_path, "rb") as f:
                                             st.download_button(
-                                                label="Download Report (XLSX)",
+                                                label="📥 Download Full Report (XLSX)",
                                                 data=f,
                                                 file_name=os.path.basename(enhanced_excel_path),
                                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                use_container_width=True
                                             )
                                     except Exception:
-                                        pass
+                                        st.button("📥 Download Report (XLSX)", disabled=True, help="Report not available")
+                            
+                            # Individual Scenario Results Summary (prominent display)
+                            if total_passed and total_failed and overall_status:
+                                st.write("")
+                                st.write("**📋 Individual Scenario Results:**")
+                                
+                                # Create a results DataFrame for display
+                                scenario_results_data = []
+                                for i, (idx, row) in enumerate(df.iterrows()):
+                                    scenario_id = row['Scenario_ID']
+                                    scenario_name = row.get('Scenario_Name', f'Scenario {scenario_id}')
+                                    passed = total_passed[i] if i < len(total_passed) else 0
+                                    failed = total_failed[i] if i < len(total_failed) else 0
+                                    status = overall_status[i] if i < len(overall_status) else 'UNKNOWN'
+                                    processing_method = processing_methods[i] if i < len(processing_methods) else 'Unknown'
+                                    
+                                    # Format status with emoji
+                                    status_display = "✅ PASS" if status == 'PASS' else "❌ FAIL"
+                                    
+                                    scenario_results_data.append({
+                                        'Scenario': f"{scenario_id}",
+                                        'Name': scenario_name,
+                                        'Passed': f"{passed:,}",
+                                        'Failed': f"{failed:,}",
+                                        'Status': status_display,
+                                        'Method': 'SQL Pushdown' if processing_method.startswith('Enhanced') else processing_method
+                                    })
+                                
+                                # Display results in a clean table
+                                results_df = pd.DataFrame(scenario_results_data)
+                                
+                                # Use columns for better display
+                                st.dataframe(
+                                    results_df,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Scenario": st.column_config.TextColumn("Scenario ID", width="small"),
+                                        "Name": st.column_config.TextColumn("Scenario Name", width="medium"), 
+                                        "Passed": st.column_config.TextColumn("Records Passed", width="small"),
+                                        "Failed": st.column_config.TextColumn("Records Failed", width="small"),
+                                        "Status": st.column_config.TextColumn("Status", width="small"),
+                                        "Method": st.column_config.TextColumn("Processing", width="medium")
+                                    }
+                                )
                         
             except Exception as e:
                 st.error(f"Error reading file: {e}")
