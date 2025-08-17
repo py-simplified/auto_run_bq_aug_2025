@@ -1,0 +1,241 @@
+Source_Column,Scenario,Target_Column,Derivation_Logic,Notes
+Component,Safe cast numeric,Component_num,"COALESCE(SAFE_CAST(Component AS NUMERIC), 0)",Type safety; numeric fallback 0
+Component,Trim & collapse blanks,Component_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Component AS STRING)), r'\s+', ' '), '')",Text normalization
+Component,Upper normalize,Component_upper,UPPER(CAST(Component AS STRING)),Case normalization
+Component,Numeric bucket,Component_bucket,CASE WHEN SAFE_CAST(Component AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Component AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Component AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Component AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Component,Month start,Component_month_start,"DATE_TRUNC(SAFE_CAST(Component AS DATE), MONTH)",Date truncation
+Component,Quarter label,Component_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Component AS DATE))",Presentation label
+Component,Safe ratio,Component_ratio_to_Component Description,"SAFE_DIVIDE(SAFE_CAST(Component AS NUMERIC), NULLIF(SAFE_CAST(Component Description AS NUMERIC), 0))",Ratio with zero protection
+Component,Row fingerprint (col),Component_fp,TO_HEX(FARM_FINGERPRINT(CAST(Component AS STRING))),Deterministic hash
+Component,Window lag delta,Component_delta,SAFE_CAST(Component AS NUMERIC) - LAG(SAFE_CAST(Component AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Component),Window: change vs previous
+Component,Rolling 30D sum,Component_roll30,SUM(SAFE_CAST(Component AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Component,JSON scalar extract,Component_json_val,"JSON_VALUE(CAST(Component AS STRING), '$.value')",Read scalar from JSON
+Component,Digits only,Component_digits,"REGEXP_REPLACE(CAST(Component AS STRING), r'[^0-9]', '')",Strip non-digits
+Component,Duplicate flag,Component_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Component ORDER BY Component) > 1, 1, 0)",Duplicate detector
+Component,Winsorize (P5/P95),Component_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Component AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Component AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Component AS NUMERIC)))",Winsorize by group
+Component,Lookup latest (scalar subquery),Component_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Component AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Component Description,Safe cast numeric,Component Description_num,"COALESCE(SAFE_CAST(Component Description AS NUMERIC), 0)",Type safety; numeric fallback 0
+Component Description,Trim & collapse blanks,Component Description_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Component Description AS STRING)), r'\s+', ' '), '')",Text normalization
+Component Description,Upper normalize,Component Description_upper,UPPER(CAST(Component Description AS STRING)),Case normalization
+Component Description,Numeric bucket,Component Description_bucket,CASE WHEN SAFE_CAST(Component Description AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Component Description AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Component Description AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Component Description AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Component Description,Month start,Component Description_month_start,"DATE_TRUNC(SAFE_CAST(Component Description AS DATE), MONTH)",Date truncation
+Component Description,Quarter label,Component Description_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Component Description AS DATE))",Presentation label
+Component Description,Safe ratio,Component Description_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Component Description AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Component Description,Row fingerprint (col),Component Description_fp,TO_HEX(FARM_FINGERPRINT(CAST(Component Description AS STRING))),Deterministic hash
+Component Description,Window lag delta,Component Description_delta,SAFE_CAST(Component Description AS NUMERIC) - LAG(SAFE_CAST(Component Description AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Component Description),Window: change vs previous
+Component Description,Rolling 30D sum,Component Description_roll30,SUM(SAFE_CAST(Component Description AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Component Description,JSON scalar extract,Component Description_json_val,"JSON_VALUE(CAST(Component Description AS STRING), '$.value')",Read scalar from JSON
+Component Description,Digits only,Component Description_digits,"REGEXP_REPLACE(CAST(Component Description AS STRING), r'[^0-9]', '')",Strip non-digits
+Component Description,Duplicate flag,Component Description_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Component Description ORDER BY Component Description) > 1, 1, 0)",Duplicate detector
+Component Description,Winsorize (P5/P95),Component Description_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Component Description AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Component Description AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Component Description AS NUMERIC)))",Winsorize by group
+Component Description,Lookup latest (scalar subquery),Component Description_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Component Description AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Scenario_ID,Safe cast numeric,Scenario_ID_num,"COALESCE(SAFE_CAST(Scenario_ID AS NUMERIC), 0)",Type safety; numeric fallback 0
+Scenario_ID,Trim & collapse blanks,Scenario_ID_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Scenario_ID AS STRING)), r'\s+', ' '), '')",Text normalization
+Scenario_ID,Upper normalize,Scenario_ID_upper,UPPER(CAST(Scenario_ID AS STRING)),Case normalization
+Scenario_ID,Numeric bucket,Scenario_ID_bucket,CASE WHEN SAFE_CAST(Scenario_ID AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Scenario_ID AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Scenario_ID AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Scenario_ID AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Scenario_ID,Month start,Scenario_ID_month_start,"DATE_TRUNC(SAFE_CAST(Scenario_ID AS DATE), MONTH)",Date truncation
+Scenario_ID,Quarter label,Scenario_ID_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Scenario_ID AS DATE))",Presentation label
+Scenario_ID,Safe ratio,Scenario_ID_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Scenario_ID AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Scenario_ID,Row fingerprint (col),Scenario_ID_fp,TO_HEX(FARM_FINGERPRINT(CAST(Scenario_ID AS STRING))),Deterministic hash
+Scenario_ID,Window lag delta,Scenario_ID_delta,SAFE_CAST(Scenario_ID AS NUMERIC) - LAG(SAFE_CAST(Scenario_ID AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Scenario_ID),Window: change vs previous
+Scenario_ID,Rolling 30D sum,Scenario_ID_roll30,SUM(SAFE_CAST(Scenario_ID AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Scenario_ID,JSON scalar extract,Scenario_ID_json_val,"JSON_VALUE(CAST(Scenario_ID AS STRING), '$.value')",Read scalar from JSON
+Scenario_ID,Digits only,Scenario_ID_digits,"REGEXP_REPLACE(CAST(Scenario_ID AS STRING), r'[^0-9]', '')",Strip non-digits
+Scenario_ID,Duplicate flag,Scenario_ID_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID ORDER BY Scenario_ID) > 1, 1, 0)",Duplicate detector
+Scenario_ID,Winsorize (P5/P95),Scenario_ID_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Scenario_ID AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Scenario_ID AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Scenario_ID AS NUMERIC)))",Winsorize by group
+Scenario_ID,Lookup latest (scalar subquery),Scenario_ID_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Scenario_ID AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Scenario_Name,Safe cast numeric,Scenario_Name_num,"COALESCE(SAFE_CAST(Scenario_Name AS NUMERIC), 0)",Type safety; numeric fallback 0
+Scenario_Name,Trim & collapse blanks,Scenario_Name_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Scenario_Name AS STRING)), r'\s+', ' '), '')",Text normalization
+Scenario_Name,Upper normalize,Scenario_Name_upper,UPPER(CAST(Scenario_Name AS STRING)),Case normalization
+Scenario_Name,Numeric bucket,Scenario_Name_bucket,CASE WHEN SAFE_CAST(Scenario_Name AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Scenario_Name AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Scenario_Name AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Scenario_Name AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Scenario_Name,Month start,Scenario_Name_month_start,"DATE_TRUNC(SAFE_CAST(Scenario_Name AS DATE), MONTH)",Date truncation
+Scenario_Name,Quarter label,Scenario_Name_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Scenario_Name AS DATE))",Presentation label
+Scenario_Name,Safe ratio,Scenario_Name_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Scenario_Name AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Scenario_Name,Row fingerprint (col),Scenario_Name_fp,TO_HEX(FARM_FINGERPRINT(CAST(Scenario_Name AS STRING))),Deterministic hash
+Scenario_Name,Window lag delta,Scenario_Name_delta,SAFE_CAST(Scenario_Name AS NUMERIC) - LAG(SAFE_CAST(Scenario_Name AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Scenario_Name),Window: change vs previous
+Scenario_Name,Rolling 30D sum,Scenario_Name_roll30,SUM(SAFE_CAST(Scenario_Name AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Scenario_Name,JSON scalar extract,Scenario_Name_json_val,"JSON_VALUE(CAST(Scenario_Name AS STRING), '$.value')",Read scalar from JSON
+Scenario_Name,Digits only,Scenario_Name_digits,"REGEXP_REPLACE(CAST(Scenario_Name AS STRING), r'[^0-9]', '')",Strip non-digits
+Scenario_Name,Duplicate flag,Scenario_Name_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Scenario_Name ORDER BY Scenario_Name) > 1, 1, 0)",Duplicate detector
+Scenario_Name,Winsorize (P5/P95),Scenario_Name_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Scenario_Name AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Scenario_Name AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Scenario_Name AS NUMERIC)))",Winsorize by group
+Scenario_Name,Lookup latest (scalar subquery),Scenario_Name_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Scenario_Name AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Description,Safe cast numeric,Description_num,"COALESCE(SAFE_CAST(Description AS NUMERIC), 0)",Type safety; numeric fallback 0
+Description,Trim & collapse blanks,Description_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Description AS STRING)), r'\s+', ' '), '')",Text normalization
+Description,Upper normalize,Description_upper,UPPER(CAST(Description AS STRING)),Case normalization
+Description,Numeric bucket,Description_bucket,CASE WHEN SAFE_CAST(Description AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Description AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Description AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Description AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Description,Month start,Description_month_start,"DATE_TRUNC(SAFE_CAST(Description AS DATE), MONTH)",Date truncation
+Description,Quarter label,Description_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Description AS DATE))",Presentation label
+Description,Safe ratio,Description_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Description AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Description,Row fingerprint (col),Description_fp,TO_HEX(FARM_FINGERPRINT(CAST(Description AS STRING))),Deterministic hash
+Description,Window lag delta,Description_delta,SAFE_CAST(Description AS NUMERIC) - LAG(SAFE_CAST(Description AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Description),Window: change vs previous
+Description,Rolling 30D sum,Description_roll30,SUM(SAFE_CAST(Description AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Description,JSON scalar extract,Description_json_val,"JSON_VALUE(CAST(Description AS STRING), '$.value')",Read scalar from JSON
+Description,Digits only,Description_digits,"REGEXP_REPLACE(CAST(Description AS STRING), r'[^0-9]', '')",Strip non-digits
+Description,Duplicate flag,Description_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Description ORDER BY Description) > 1, 1, 0)",Duplicate detector
+Description,Winsorize (P5/P95),Description_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Description AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Description AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Description AS NUMERIC)))",Winsorize by group
+Description,Lookup latest (scalar subquery),Description_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Description AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Source_Project_Id,Safe cast numeric,Source_Project_Id_num,"COALESCE(SAFE_CAST(Source_Project_Id AS NUMERIC), 0)",Type safety; numeric fallback 0
+Source_Project_Id,Trim & collapse blanks,Source_Project_Id_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Source_Project_Id AS STRING)), r'\s+', ' '), '')",Text normalization
+Source_Project_Id,Upper normalize,Source_Project_Id_upper,UPPER(CAST(Source_Project_Id AS STRING)),Case normalization
+Source_Project_Id,Numeric bucket,Source_Project_Id_bucket,CASE WHEN SAFE_CAST(Source_Project_Id AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Source_Project_Id AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Source_Project_Id AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Source_Project_Id AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Source_Project_Id,Month start,Source_Project_Id_month_start,"DATE_TRUNC(SAFE_CAST(Source_Project_Id AS DATE), MONTH)",Date truncation
+Source_Project_Id,Quarter label,Source_Project_Id_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Source_Project_Id AS DATE))",Presentation label
+Source_Project_Id,Safe ratio,Source_Project_Id_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Source_Project_Id AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Source_Project_Id,Row fingerprint (col),Source_Project_Id_fp,TO_HEX(FARM_FINGERPRINT(CAST(Source_Project_Id AS STRING))),Deterministic hash
+Source_Project_Id,Window lag delta,Source_Project_Id_delta,SAFE_CAST(Source_Project_Id AS NUMERIC) - LAG(SAFE_CAST(Source_Project_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Source_Project_Id),Window: change vs previous
+Source_Project_Id,Rolling 30D sum,Source_Project_Id_roll30,SUM(SAFE_CAST(Source_Project_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Source_Project_Id,JSON scalar extract,Source_Project_Id_json_val,"JSON_VALUE(CAST(Source_Project_Id AS STRING), '$.value')",Read scalar from JSON
+Source_Project_Id,Digits only,Source_Project_Id_digits,"REGEXP_REPLACE(CAST(Source_Project_Id AS STRING), r'[^0-9]', '')",Strip non-digits
+Source_Project_Id,Duplicate flag,Source_Project_Id_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Source_Project_Id, Scenario_ID ORDER BY Source_Project_Id) > 1, 1, 0)",Duplicate detector
+Source_Project_Id,Winsorize (P5/P95),Source_Project_Id_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Source_Project_Id AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Source_Project_Id AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Source_Project_Id AS NUMERIC)))",Winsorize by group
+Source_Project_Id,Lookup latest (scalar subquery),Source_Project_Id_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Source_Project_Id AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Source_Dataset_Id,Safe cast numeric,Source_Dataset_Id_num,"COALESCE(SAFE_CAST(Source_Dataset_Id AS NUMERIC), 0)",Type safety; numeric fallback 0
+Source_Dataset_Id,Trim & collapse blanks,Source_Dataset_Id_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Source_Dataset_Id AS STRING)), r'\s+', ' '), '')",Text normalization
+Source_Dataset_Id,Upper normalize,Source_Dataset_Id_upper,UPPER(CAST(Source_Dataset_Id AS STRING)),Case normalization
+Source_Dataset_Id,Numeric bucket,Source_Dataset_Id_bucket,CASE WHEN SAFE_CAST(Source_Dataset_Id AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Source_Dataset_Id AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Source_Dataset_Id AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Source_Dataset_Id AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Source_Dataset_Id,Month start,Source_Dataset_Id_month_start,"DATE_TRUNC(SAFE_CAST(Source_Dataset_Id AS DATE), MONTH)",Date truncation
+Source_Dataset_Id,Quarter label,Source_Dataset_Id_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Source_Dataset_Id AS DATE))",Presentation label
+Source_Dataset_Id,Safe ratio,Source_Dataset_Id_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Source_Dataset_Id AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Source_Dataset_Id,Row fingerprint (col),Source_Dataset_Id_fp,TO_HEX(FARM_FINGERPRINT(CAST(Source_Dataset_Id AS STRING))),Deterministic hash
+Source_Dataset_Id,Window lag delta,Source_Dataset_Id_delta,SAFE_CAST(Source_Dataset_Id AS NUMERIC) - LAG(SAFE_CAST(Source_Dataset_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Source_Dataset_Id),Window: change vs previous
+Source_Dataset_Id,Rolling 30D sum,Source_Dataset_Id_roll30,SUM(SAFE_CAST(Source_Dataset_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Source_Dataset_Id,JSON scalar extract,Source_Dataset_Id_json_val,"JSON_VALUE(CAST(Source_Dataset_Id AS STRING), '$.value')",Read scalar from JSON
+Source_Dataset_Id,Digits only,Source_Dataset_Id_digits,"REGEXP_REPLACE(CAST(Source_Dataset_Id AS STRING), r'[^0-9]', '')",Strip non-digits
+Source_Dataset_Id,Duplicate flag,Source_Dataset_Id_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Source_Dataset_Id, Scenario_ID ORDER BY Source_Dataset_Id) > 1, 1, 0)",Duplicate detector
+Source_Dataset_Id,Winsorize (P5/P95),Source_Dataset_Id_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Source_Dataset_Id AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Source_Dataset_Id AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Source_Dataset_Id AS NUMERIC)))",Winsorize by group
+Source_Dataset_Id,Lookup latest (scalar subquery),Source_Dataset_Id_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Source_Dataset_Id AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Source_Table,Safe cast numeric,Source_Table_num,"COALESCE(SAFE_CAST(Source_Table AS NUMERIC), 0)",Type safety; numeric fallback 0
+Source_Table,Trim & collapse blanks,Source_Table_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Source_Table AS STRING)), r'\s+', ' '), '')",Text normalization
+Source_Table,Upper normalize,Source_Table_upper,UPPER(CAST(Source_Table AS STRING)),Case normalization
+Source_Table,Numeric bucket,Source_Table_bucket,CASE WHEN SAFE_CAST(Source_Table AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Source_Table AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Source_Table AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Source_Table AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Source_Table,Month start,Source_Table_month_start,"DATE_TRUNC(SAFE_CAST(Source_Table AS DATE), MONTH)",Date truncation
+Source_Table,Quarter label,Source_Table_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Source_Table AS DATE))",Presentation label
+Source_Table,Safe ratio,Source_Table_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Source_Table AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Source_Table,Row fingerprint (col),Source_Table_fp,TO_HEX(FARM_FINGERPRINT(CAST(Source_Table AS STRING))),Deterministic hash
+Source_Table,Window lag delta,Source_Table_delta,SAFE_CAST(Source_Table AS NUMERIC) - LAG(SAFE_CAST(Source_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Source_Table),Window: change vs previous
+Source_Table,Rolling 30D sum,Source_Table_roll30,SUM(SAFE_CAST(Source_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Source_Table,JSON scalar extract,Source_Table_json_val,"JSON_VALUE(CAST(Source_Table AS STRING), '$.value')",Read scalar from JSON
+Source_Table,Digits only,Source_Table_digits,"REGEXP_REPLACE(CAST(Source_Table AS STRING), r'[^0-9]', '')",Strip non-digits
+Source_Table,Duplicate flag,Source_Table_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Source_Table ORDER BY Source_Table) > 1, 1, 0)",Duplicate detector
+Source_Table,Winsorize (P5/P95),Source_Table_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Source_Table AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Source_Table AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Source_Table AS NUMERIC)))",Winsorize by group
+Source_Table,Lookup latest (scalar subquery),Source_Table_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Source_Table AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Target_Project_Id,Safe cast numeric,Target_Project_Id_num,"COALESCE(SAFE_CAST(Target_Project_Id AS NUMERIC), 0)",Type safety; numeric fallback 0
+Target_Project_Id,Trim & collapse blanks,Target_Project_Id_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Target_Project_Id AS STRING)), r'\s+', ' '), '')",Text normalization
+Target_Project_Id,Upper normalize,Target_Project_Id_upper,UPPER(CAST(Target_Project_Id AS STRING)),Case normalization
+Target_Project_Id,Numeric bucket,Target_Project_Id_bucket,CASE WHEN SAFE_CAST(Target_Project_Id AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Target_Project_Id AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Target_Project_Id AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Target_Project_Id AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Target_Project_Id,Month start,Target_Project_Id_month_start,"DATE_TRUNC(SAFE_CAST(Target_Project_Id AS DATE), MONTH)",Date truncation
+Target_Project_Id,Quarter label,Target_Project_Id_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Target_Project_Id AS DATE))",Presentation label
+Target_Project_Id,Safe ratio,Target_Project_Id_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Target_Project_Id AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Target_Project_Id,Row fingerprint (col),Target_Project_Id_fp,TO_HEX(FARM_FINGERPRINT(CAST(Target_Project_Id AS STRING))),Deterministic hash
+Target_Project_Id,Window lag delta,Target_Project_Id_delta,SAFE_CAST(Target_Project_Id AS NUMERIC) - LAG(SAFE_CAST(Target_Project_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Target_Project_Id),Window: change vs previous
+Target_Project_Id,Rolling 30D sum,Target_Project_Id_roll30,SUM(SAFE_CAST(Target_Project_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Target_Project_Id,JSON scalar extract,Target_Project_Id_json_val,"JSON_VALUE(CAST(Target_Project_Id AS STRING), '$.value')",Read scalar from JSON
+Target_Project_Id,Digits only,Target_Project_Id_digits,"REGEXP_REPLACE(CAST(Target_Project_Id AS STRING), r'[^0-9]', '')",Strip non-digits
+Target_Project_Id,Duplicate flag,Target_Project_Id_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Target_Project_Id ORDER BY Target_Project_Id) > 1, 1, 0)",Duplicate detector
+Target_Project_Id,Winsorize (P5/P95),Target_Project_Id_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Target_Project_Id AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Target_Project_Id AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Target_Project_Id AS NUMERIC)))",Winsorize by group
+Target_Project_Id,Lookup latest (scalar subquery),Target_Project_Id_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Target_Project_Id AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Target_Dataset_Id,Safe cast numeric,Target_Dataset_Id_num,"COALESCE(SAFE_CAST(Target_Dataset_Id AS NUMERIC), 0)",Type safety; numeric fallback 0
+Target_Dataset_Id,Trim & collapse blanks,Target_Dataset_Id_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Target_Dataset_Id AS STRING)), r'\s+', ' '), '')",Text normalization
+Target_Dataset_Id,Upper normalize,Target_Dataset_Id_upper,UPPER(CAST(Target_Dataset_Id AS STRING)),Case normalization
+Target_Dataset_Id,Numeric bucket,Target_Dataset_Id_bucket,CASE WHEN SAFE_CAST(Target_Dataset_Id AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Target_Dataset_Id AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Target_Dataset_Id AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Target_Dataset_Id AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Target_Dataset_Id,Month start,Target_Dataset_Id_month_start,"DATE_TRUNC(SAFE_CAST(Target_Dataset_Id AS DATE), MONTH)",Date truncation
+Target_Dataset_Id,Quarter label,Target_Dataset_Id_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Target_Dataset_Id AS DATE))",Presentation label
+Target_Dataset_Id,Safe ratio,Target_Dataset_Id_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Target_Dataset_Id AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Target_Dataset_Id,Row fingerprint (col),Target_Dataset_Id_fp,TO_HEX(FARM_FINGERPRINT(CAST(Target_Dataset_Id AS STRING))),Deterministic hash
+Target_Dataset_Id,Window lag delta,Target_Dataset_Id_delta,SAFE_CAST(Target_Dataset_Id AS NUMERIC) - LAG(SAFE_CAST(Target_Dataset_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Target_Dataset_Id),Window: change vs previous
+Target_Dataset_Id,Rolling 30D sum,Target_Dataset_Id_roll30,SUM(SAFE_CAST(Target_Dataset_Id AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Target_Dataset_Id,JSON scalar extract,Target_Dataset_Id_json_val,"JSON_VALUE(CAST(Target_Dataset_Id AS STRING), '$.value')",Read scalar from JSON
+Target_Dataset_Id,Digits only,Target_Dataset_Id_digits,"REGEXP_REPLACE(CAST(Target_Dataset_Id AS STRING), r'[^0-9]', '')",Strip non-digits
+Target_Dataset_Id,Duplicate flag,Target_Dataset_Id_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Target_Dataset_Id ORDER BY Target_Dataset_Id) > 1, 1, 0)",Duplicate detector
+Target_Dataset_Id,Winsorize (P5/P95),Target_Dataset_Id_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Target_Dataset_Id AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Target_Dataset_Id AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Target_Dataset_Id AS NUMERIC)))",Winsorize by group
+Target_Dataset_Id,Lookup latest (scalar subquery),Target_Dataset_Id_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Target_Dataset_Id AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Target_Table,Safe cast numeric,Target_Table_num,"COALESCE(SAFE_CAST(Target_Table AS NUMERIC), 0)",Type safety; numeric fallback 0
+Target_Table,Trim & collapse blanks,Target_Table_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Target_Table AS STRING)), r'\s+', ' '), '')",Text normalization
+Target_Table,Upper normalize,Target_Table_upper,UPPER(CAST(Target_Table AS STRING)),Case normalization
+Target_Table,Numeric bucket,Target_Table_bucket,CASE WHEN SAFE_CAST(Target_Table AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Target_Table AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Target_Table AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Target_Table AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Target_Table,Month start,Target_Table_month_start,"DATE_TRUNC(SAFE_CAST(Target_Table AS DATE), MONTH)",Date truncation
+Target_Table,Quarter label,Target_Table_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Target_Table AS DATE))",Presentation label
+Target_Table,Safe ratio,Target_Table_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Target_Table AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Target_Table,Row fingerprint (col),Target_Table_fp,TO_HEX(FARM_FINGERPRINT(CAST(Target_Table AS STRING))),Deterministic hash
+Target_Table,Window lag delta,Target_Table_delta,SAFE_CAST(Target_Table AS NUMERIC) - LAG(SAFE_CAST(Target_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Target_Table),Window: change vs previous
+Target_Table,Rolling 30D sum,Target_Table_roll30,SUM(SAFE_CAST(Target_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Target_Table,JSON scalar extract,Target_Table_json_val,"JSON_VALUE(CAST(Target_Table AS STRING), '$.value')",Read scalar from JSON
+Target_Table,Digits only,Target_Table_digits,"REGEXP_REPLACE(CAST(Target_Table AS STRING), r'[^0-9]', '')",Strip non-digits
+Target_Table,Duplicate flag,Target_Table_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Target_Table, Scenario_ID ORDER BY Target_Table) > 1, 1, 0)",Duplicate detector
+Target_Table,Winsorize (P5/P95),Target_Table_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Target_Table AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Target_Table AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Target_Table AS NUMERIC)))",Winsorize by group
+Target_Table,Lookup latest (scalar subquery),Target_Table_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Target_Table AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Target_Column,Safe cast numeric,Target_Column_num,"COALESCE(SAFE_CAST(Target_Column AS NUMERIC), 0)",Type safety; numeric fallback 0
+Target_Column,Trim & collapse blanks,Target_Column_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Target_Column AS STRING)), r'\s+', ' '), '')",Text normalization
+Target_Column,Upper normalize,Target_Column_upper,UPPER(CAST(Target_Column AS STRING)),Case normalization
+Target_Column,Numeric bucket,Target_Column_bucket,CASE WHEN SAFE_CAST(Target_Column AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Target_Column AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Target_Column AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Target_Column AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Target_Column,Month start,Target_Column_month_start,"DATE_TRUNC(SAFE_CAST(Target_Column AS DATE), MONTH)",Date truncation
+Target_Column,Quarter label,Target_Column_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Target_Column AS DATE))",Presentation label
+Target_Column,Safe ratio,Target_Column_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Target_Column AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Target_Column,Row fingerprint (col),Target_Column_fp,TO_HEX(FARM_FINGERPRINT(CAST(Target_Column AS STRING))),Deterministic hash
+Target_Column,Window lag delta,Target_Column_delta,SAFE_CAST(Target_Column AS NUMERIC) - LAG(SAFE_CAST(Target_Column AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Target_Column),Window: change vs previous
+Target_Column,Rolling 30D sum,Target_Column_roll30,SUM(SAFE_CAST(Target_Column AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Target_Column,JSON scalar extract,Target_Column_json_val,"JSON_VALUE(CAST(Target_Column AS STRING), '$.value')",Read scalar from JSON
+Target_Column,Digits only,Target_Column_digits,"REGEXP_REPLACE(CAST(Target_Column AS STRING), r'[^0-9]', '')",Strip non-digits
+Target_Column,Duplicate flag,Target_Column_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Target_Column ORDER BY Target_Column) > 1, 1, 0)",Duplicate detector
+Target_Column,Winsorize (P5/P95),Target_Column_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Target_Column AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Target_Column AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Target_Column AS NUMERIC)))",Winsorize by group
+Target_Column,Lookup latest (scalar subquery),Target_Column_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Target_Column AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Reference_Table,Safe cast numeric,Reference_Table_num,"COALESCE(SAFE_CAST(Reference_Table AS NUMERIC), 0)",Type safety; numeric fallback 0
+Reference_Table,Trim & collapse blanks,Reference_Table_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Reference_Table AS STRING)), r'\s+', ' '), '')",Text normalization
+Reference_Table,Upper normalize,Reference_Table_upper,UPPER(CAST(Reference_Table AS STRING)),Case normalization
+Reference_Table,Numeric bucket,Reference_Table_bucket,CASE WHEN SAFE_CAST(Reference_Table AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Reference_Table AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Reference_Table AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Reference_Table AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Reference_Table,Month start,Reference_Table_month_start,"DATE_TRUNC(SAFE_CAST(Reference_Table AS DATE), MONTH)",Date truncation
+Reference_Table,Quarter label,Reference_Table_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Reference_Table AS DATE))",Presentation label
+Reference_Table,Safe ratio,Reference_Table_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Reference_Table AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Reference_Table,Row fingerprint (col),Reference_Table_fp,TO_HEX(FARM_FINGERPRINT(CAST(Reference_Table AS STRING))),Deterministic hash
+Reference_Table,Window lag delta,Reference_Table_delta,SAFE_CAST(Reference_Table AS NUMERIC) - LAG(SAFE_CAST(Reference_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Reference_Table),Window: change vs previous
+Reference_Table,Rolling 30D sum,Reference_Table_roll30,SUM(SAFE_CAST(Reference_Table AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Reference_Table,JSON scalar extract,Reference_Table_json_val,"JSON_VALUE(CAST(Reference_Table AS STRING), '$.value')",Read scalar from JSON
+Reference_Table,Digits only,Reference_Table_digits,"REGEXP_REPLACE(CAST(Reference_Table AS STRING), r'[^0-9]', '')",Strip non-digits
+Reference_Table,Duplicate flag,Reference_Table_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Reference_Table, Scenario_ID ORDER BY Reference_Table) > 1, 1, 0)",Duplicate detector
+Reference_Table,Winsorize (P5/P95),Reference_Table_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Reference_Table AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Reference_Table AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Reference_Table AS NUMERIC)))",Winsorize by group
+Reference_Table,Lookup latest (scalar subquery),Reference_Table_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Reference_Table AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Reference_Join_Key,Safe cast numeric,Reference_Join_Key_num,"COALESCE(SAFE_CAST(Reference_Join_Key AS NUMERIC), 0)",Type safety; numeric fallback 0
+Reference_Join_Key,Trim & collapse blanks,Reference_Join_Key_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Reference_Join_Key AS STRING)), r'\s+', ' '), '')",Text normalization
+Reference_Join_Key,Upper normalize,Reference_Join_Key_upper,UPPER(CAST(Reference_Join_Key AS STRING)),Case normalization
+Reference_Join_Key,Numeric bucket,Reference_Join_Key_bucket,CASE WHEN SAFE_CAST(Reference_Join_Key AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Reference_Join_Key AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Reference_Join_Key AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Reference_Join_Key AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Reference_Join_Key,Month start,Reference_Join_Key_month_start,"DATE_TRUNC(SAFE_CAST(Reference_Join_Key AS DATE), MONTH)",Date truncation
+Reference_Join_Key,Quarter label,Reference_Join_Key_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Reference_Join_Key AS DATE))",Presentation label
+Reference_Join_Key,Safe ratio,Reference_Join_Key_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Reference_Join_Key AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Reference_Join_Key,Row fingerprint (col),Reference_Join_Key_fp,TO_HEX(FARM_FINGERPRINT(CAST(Reference_Join_Key AS STRING))),Deterministic hash
+Reference_Join_Key,Window lag delta,Reference_Join_Key_delta,SAFE_CAST(Reference_Join_Key AS NUMERIC) - LAG(SAFE_CAST(Reference_Join_Key AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Reference_Join_Key),Window: change vs previous
+Reference_Join_Key,Rolling 30D sum,Reference_Join_Key_roll30,SUM(SAFE_CAST(Reference_Join_Key AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Reference_Join_Key,JSON scalar extract,Reference_Join_Key_json_val,"JSON_VALUE(CAST(Reference_Join_Key AS STRING), '$.value')",Read scalar from JSON
+Reference_Join_Key,Digits only,Reference_Join_Key_digits,"REGEXP_REPLACE(CAST(Reference_Join_Key AS STRING), r'[^0-9]', '')",Strip non-digits
+Reference_Join_Key,Duplicate flag,Reference_Join_Key_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Scenario_ID, Reference_Join_Key ORDER BY Reference_Join_Key) > 1, 1, 0)",Duplicate detector
+Reference_Join_Key,Winsorize (P5/P95),Reference_Join_Key_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Reference_Join_Key AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Reference_Join_Key AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Reference_Join_Key AS NUMERIC)))",Winsorize by group
+Reference_Join_Key,Lookup latest (scalar subquery),Reference_Join_Key_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Reference_Join_Key AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Reference_Lookup_Column,Safe cast numeric,Reference_Lookup_Column_num,"COALESCE(SAFE_CAST(Reference_Lookup_Column AS NUMERIC), 0)",Type safety; numeric fallback 0
+Reference_Lookup_Column,Trim & collapse blanks,Reference_Lookup_Column_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Reference_Lookup_Column AS STRING)), r'\s+', ' '), '')",Text normalization
+Reference_Lookup_Column,Upper normalize,Reference_Lookup_Column_upper,UPPER(CAST(Reference_Lookup_Column AS STRING)),Case normalization
+Reference_Lookup_Column,Numeric bucket,Reference_Lookup_Column_bucket,CASE WHEN SAFE_CAST(Reference_Lookup_Column AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Reference_Lookup_Column AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Reference_Lookup_Column AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Reference_Lookup_Column AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Reference_Lookup_Column,Month start,Reference_Lookup_Column_month_start,"DATE_TRUNC(SAFE_CAST(Reference_Lookup_Column AS DATE), MONTH)",Date truncation
+Reference_Lookup_Column,Quarter label,Reference_Lookup_Column_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Reference_Lookup_Column AS DATE))",Presentation label
+Reference_Lookup_Column,Safe ratio,Reference_Lookup_Column_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Reference_Lookup_Column AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Reference_Lookup_Column,Row fingerprint (col),Reference_Lookup_Column_fp,TO_HEX(FARM_FINGERPRINT(CAST(Reference_Lookup_Column AS STRING))),Deterministic hash
+Reference_Lookup_Column,Window lag delta,Reference_Lookup_Column_delta,SAFE_CAST(Reference_Lookup_Column AS NUMERIC) - LAG(SAFE_CAST(Reference_Lookup_Column AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Reference_Lookup_Column),Window: change vs previous
+Reference_Lookup_Column,Rolling 30D sum,Reference_Lookup_Column_roll30,SUM(SAFE_CAST(Reference_Lookup_Column AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Reference_Lookup_Column,JSON scalar extract,Reference_Lookup_Column_json_val,"JSON_VALUE(CAST(Reference_Lookup_Column AS STRING), '$.value')",Read scalar from JSON
+Reference_Lookup_Column,Digits only,Reference_Lookup_Column_digits,"REGEXP_REPLACE(CAST(Reference_Lookup_Column AS STRING), r'[^0-9]', '')",Strip non-digits
+Reference_Lookup_Column,Duplicate flag,Reference_Lookup_Column_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Reference_Lookup_Column, Scenario_ID ORDER BY Reference_Lookup_Column) > 1, 1, 0)",Duplicate detector
+Reference_Lookup_Column,Winsorize (P5/P95),Reference_Lookup_Column_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Reference_Lookup_Column AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Reference_Lookup_Column AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Reference_Lookup_Column AS NUMERIC)))",Winsorize by group
+Reference_Lookup_Column,Lookup latest (scalar subquery),Reference_Lookup_Column_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Reference_Lookup_Column AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
+Derivation_Logic,Safe cast numeric,Derivation_Logic_num,"COALESCE(SAFE_CAST(Derivation_Logic AS NUMERIC), 0)",Type safety; numeric fallback 0
+Derivation_Logic,Trim & collapse blanks,Derivation_Logic_trim,"NULLIF(REGEXP_REPLACE(TRIM(CAST(Derivation_Logic AS STRING)), r'\s+', ' '), '')",Text normalization
+Derivation_Logic,Upper normalize,Derivation_Logic_upper,UPPER(CAST(Derivation_Logic AS STRING)),Case normalization
+Derivation_Logic,Numeric bucket,Derivation_Logic_bucket,CASE WHEN SAFE_CAST(Derivation_Logic AS NUMERIC) IS NULL THEN 'UNKNOWN' WHEN SAFE_CAST(Derivation_Logic AS NUMERIC) < 0 THEN 'NEG' WHEN SAFE_CAST(Derivation_Logic AS NUMERIC) < 100 THEN 'LOW' WHEN SAFE_CAST(Derivation_Logic AS NUMERIC) < 1000 THEN 'MED' ELSE 'HIGH' END,Binning
+Derivation_Logic,Month start,Derivation_Logic_month_start,"DATE_TRUNC(SAFE_CAST(Derivation_Logic AS DATE), MONTH)",Date truncation
+Derivation_Logic,Quarter label,Derivation_Logic_qtr_label,"FORMAT_DATE('Q%q-%Y', SAFE_CAST(Derivation_Logic AS DATE))",Presentation label
+Derivation_Logic,Safe ratio,Derivation_Logic_ratio_to_Component,"SAFE_DIVIDE(SAFE_CAST(Derivation_Logic AS NUMERIC), NULLIF(SAFE_CAST(Component AS NUMERIC), 0))",Ratio with zero protection
+Derivation_Logic,Row fingerprint (col),Derivation_Logic_fp,TO_HEX(FARM_FINGERPRINT(CAST(Derivation_Logic AS STRING))),Deterministic hash
+Derivation_Logic,Window lag delta,Derivation_Logic_delta,SAFE_CAST(Derivation_Logic AS NUMERIC) - LAG(SAFE_CAST(Derivation_Logic AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY Derivation_Logic),Window: change vs previous
+Derivation_Logic,Rolling 30D sum,Derivation_Logic_roll30,SUM(SAFE_CAST(Derivation_Logic AS NUMERIC)) OVER (PARTITION BY Scenario_ID ORDER BY TXN_TIMESTAMP RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW),Window: 30-day rolling sum
+Derivation_Logic,JSON scalar extract,Derivation_Logic_json_val,"JSON_VALUE(CAST(Derivation_Logic AS STRING), '$.value')",Read scalar from JSON
+Derivation_Logic,Digits only,Derivation_Logic_digits,"REGEXP_REPLACE(CAST(Derivation_Logic AS STRING), r'[^0-9]', '')",Strip non-digits
+Derivation_Logic,Duplicate flag,Derivation_Logic_dup_flag,"IF(ROW_NUMBER() OVER (PARTITION BY Derivation_Logic, Scenario_ID ORDER BY Derivation_Logic) > 1, 1, 0)",Duplicate detector
+Derivation_Logic,Winsorize (P5/P95),Derivation_Logic_winsor,"LEAST(PERCENTILE_CONT(SAFE_CAST(Derivation_Logic AS NUMERIC), 0.95) OVER (PARTITION BY Scenario_ID), GREATEST(PERCENTILE_CONT(SAFE_CAST(Derivation_Logic AS NUMERIC), 0.05) OVER (PARTITION BY Scenario_ID), SAFE_CAST(Derivation_Logic AS NUMERIC)))",Winsorize by group
+Derivation_Logic,Lookup latest (scalar subquery),Derivation_Logic_latest_dim,(SELECT AS VALUE d.lookup_val FROM `project.dataset.dim_lookup` d WHERE d.key = CAST(Derivation_Logic AS STRING) ORDER BY d.eff_dt DESC LIMIT 1),Scalar subquery lookup
